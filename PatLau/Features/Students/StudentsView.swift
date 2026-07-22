@@ -13,6 +13,7 @@ struct StudentsView: View {
     @EnvironmentObject private var state: AppState
     @State private var programme: Programme
     @State private var records: [DynamicRecord] = []
+    @State private var weekdayPaymentRecords: [DynamicRecord] = []
     @State private var search = ""
     @State private var dayFilter = "All days"
     @State private var timeslotFilter = "All timeslots"
@@ -155,7 +156,13 @@ struct StudentsView: View {
     private var detailKeys: [String] {
         switch programme {
         case .weekend: ["student_day", "student_timeslot", "student_levelofplay", "price", "total_weeks", "attended", "missed"]
-        case .weekday: ["hourly_rate", "total_payment_amount"]
+        case .weekday: [
+            "scheduled_sessions",
+            "hourly_rate",
+            "monthly_payable_hours",
+            "total_payment_amount",
+            "payment_period"
+        ]
         case .matchplay: ["number_of_weeks", "price_per_session"]
         case .oneToOne: ["payment_amount"]
         }
@@ -164,6 +171,23 @@ struct StudentsView: View {
     private func load() async {
         loading = records.isEmpty
         defer { loading = false }
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestingWeekdayDashboard"),
+           programme == .weekday {
+            weekdayPaymentRecords = []
+            records = [weekdayDashboardRecord(DynamicRecord(values: [
+                "id": .string("ui-test-weekday-dashboard-student"),
+                "student_name": .string("Brandon Teo"),
+                "hourly_rate": .number(80),
+                "schedules": .array([
+                    .object(["day": .string("Wednesday"), "duration_hours": .number(2)]),
+                    .object(["day": .string("Thursday"), "duration_hours": .number(1)])
+                ]),
+                "active": .bool(true)
+            ]))]
+            return
+        }
+#endif
         do {
             if programme == .weekend {
                 records = try await BackendClient.shared.weekendStudents(
@@ -178,11 +202,82 @@ struct StudentsView: View {
             if let activeFilter = programme.activeStudentFilter {
                 query.insert(activeFilter, at: 0)
             }
-            records = try await BackendClient.shared.select(
-                table: programme.studentTable,
-                query: query
-            )
+            if programme == .weekday {
+                let studentQuery = query
+                async let loadedStudents = BackendClient.shared.select(
+                    table: programme.studentTable,
+                    query: studentQuery
+                )
+                async let loadedPayments = BackendClient.shared.select(
+                    table: programme.paymentTable,
+                    query: [
+                        .init(name: "payment_month", value: "eq.\(weekdayDashboardMonth.monthKey)"),
+                        .init(name: "order", value: "day_name.asc")
+                    ]
+                )
+                let students = try await loadedStudents
+                weekdayPaymentRecords = try await loadedPayments
+                records = students.map(weekdayDashboardRecord)
+            } else {
+                records = try await BackendClient.shared.select(
+                    table: programme.studentTable,
+                    query: query
+                )
+            }
         } catch { state.show(error) }
+    }
+
+    private func weekdayDashboardRecord(_ record: DynamicRecord) -> DynamicRecord {
+        let schedules = record.values["schedules"]?.array?
+            .compactMap(\.object) ?? []
+        let manualHours = weekdayPaymentRecords.reduce(into: [String: Double]()) {
+            result, payment in
+            guard payment.values.text("weekday_student_id") == record.id,
+                  let hours = payment.values["manual_hours"]?.double else {
+                return
+            }
+            result[payment.values.text("day_name")] = hours
+        }
+        let rate = record.values.number("hourly_rate", fallback: 80)
+        let summary = WeekdayMonthlyPaymentCalculator.summary(
+            schedules: schedules,
+            hourlyRate: rate,
+            month: weekdayDashboardMonth,
+            manualHoursByDay: manualHours
+        )
+
+        var values = record.values
+        values["scheduled_sessions"] = .string(
+            schedules.map { schedule in
+                let hours = schedule.number(
+                    "duration_hours",
+                    fallback: schedule.number("duration", fallback: 1)
+                )
+                return "\(schedule.text("day")) · \(numberLabel(hours))h"
+            }
+            .joined(separator: ", ")
+        )
+        values["monthly_payable_hours"] = .number(summary.payableHours)
+        values["total_payment_amount"] = .number(summary.amount)
+        values["payment_period"] = .string(
+            weekdayDashboardMonth.formatted(.dateTime.month(.wide).year())
+        )
+        return DynamicRecord(values: values)
+    }
+
+    private var weekdayDashboardMonth: Date {
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestingWeekdayDashboard") {
+            return Calendar.current.date(
+                from: DateComponents(year: 2026, month: 7, day: 15)
+            ) ?? Date()
+        }
+#endif
+        return Date()
+    }
+
+    private func numberLabel(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(value)
     }
 
     private func remove(_ record: DynamicRecord) async {
@@ -356,7 +451,16 @@ struct AddStudentPage: View {
             values.merge(["student_id": .string(UUID().uuidString), "student_day": .string(day), "student_timeslot": .string(timeslot), "student_levelofplay": .string(level), "price": .number(priceToSave), "total_weeks": .number(Double(weeksToSave)), "weeks_completed": .number(0), "attended": .number(0), "missed": .number(0), "created_at": .string(now)]) { _, new in new }
         case .weekday:
             let schedules = selectedDays.sorted().map { JSONValue.object(["day": .string($0), "duration_hours": .number(hours[$0] ?? 1)]) }
-            values.merge(["schedules": .array(schedules), "hourly_rate": .number(priceToSave), "total_payment_amount": .number(schedules.reduce(0) { total, item in total + (item.object?.number("duration_hours") ?? 0) } * priceToSave * 4)]) { _, new in new }
+            let monthlySummary = WeekdayMonthlyPaymentCalculator.summary(
+                schedules: schedules.compactMap(\.object),
+                hourlyRate: priceToSave,
+                month: Date()
+            )
+            values.merge([
+                "schedules": .array(schedules),
+                "hourly_rate": .number(priceToSave),
+                "total_payment_amount": .number(monthlySummary.amount)
+            ]) { _, new in new }
         case .matchplay: values.merge(["number_of_weeks": .number(Double(weeksToSave)), "price_per_session": .number(priceToSave)]) { _, new in new }
         case .oneToOne: values["payment_amount"] = .number(priceToSave)
         }
@@ -548,11 +652,13 @@ private struct StudentDetailView: View {
                     "duration_hours": .number(hours[$0] ?? 1)
                 ])
             }
-            values["schedules"] = .array(schedules)
-            values["total_payment_amount"] = .number(
-                schedules.reduce(0) { $0 + ($1.object?.number("duration_hours") ?? 0) }
-                    * amount * 4
+            let monthlySummary = WeekdayMonthlyPaymentCalculator.summary(
+                schedules: schedules.compactMap(\.object),
+                hourlyRate: amount,
+                month: Date()
             )
+            values["schedules"] = .array(schedules)
+            values["total_payment_amount"] = .number(monthlySummary.amount)
         }
         do { _ = try await BackendClient.shared.update(table: programme.studentTable, values: values, filters: [.init(name: idKey, value: "eq.\(record.values.text(idKey))")]); state.show("Student updated."); await onChanged() }
         catch { state.show(error.localizedDescription, kind: .error) }
