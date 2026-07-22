@@ -47,6 +47,10 @@ struct SettingsView: View {
             photoSection
             securitySection
 
+            if state.role == .superuser {
+                telegramSupportAdminSection
+            }
+
             if canManageUsers {
                 userManagementSection
             }
@@ -310,6 +314,31 @@ struct SettingsView: View {
         }
     }
 
+    private var telegramSupportAdminSection: some View {
+        Section {
+            NavigationLink {
+                TelegramSupportAdministratorsView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Telegram Administrators")
+                            .foregroundStyle(Theme.ink)
+                        Text("Manage parent-support alert recipients")
+                            .font(.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                } icon: {
+                    Image(systemName: "paperplane.circle.fill")
+                        .foregroundStyle(Theme.blue)
+                }
+            }
+        } header: {
+            Text("Parent Support Bot")
+        } footer: {
+            Text("Only superusers can add, disable, or remove Telegram support administrators.")
+        }
+    }
+
     private func loadPhoto(_ item: PhotosPickerItem?) async {
         guard let item,
               let data = try? await item.loadTransferable(type: Data.self),
@@ -413,6 +442,385 @@ struct SettingsView: View {
         }
 
         return .member
+    }
+}
+
+private struct TelegramSupportAdministrator: Identifiable, Equatable {
+    let id: String
+    let displayName: String
+    let chatID: String
+    let active: Bool
+
+    init?(values: JSONObject) {
+        let id = values.text("id")
+        let displayName = values.text("display_name")
+        let chatID = values.text("telegram_chat_id")
+        guard !id.isEmpty, !displayName.isEmpty, !chatID.isEmpty else { return nil }
+
+        self.id = id
+        self.displayName = displayName
+        self.chatID = chatID
+        active = values.flag("active")
+    }
+
+    var maskedChatID: String {
+        "Telegram ID ending \(chatID.suffix(4))"
+    }
+}
+
+private struct TelegramSupportAdministratorsView: View {
+    @EnvironmentObject private var state: AppState
+
+    @State private var administrators: [TelegramSupportAdministrator] = []
+    @State private var loading = false
+    @State private var environmentAdministratorConfigured = false
+    @State private var pendingRemoval: TelegramSupportAdministrator?
+    @State private var showRemovalConfirmation = false
+
+    private var activeCount: Int {
+        administrators.filter(\.active).count
+    }
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("How to connect an account", systemImage: "link.circle.fill")
+                        .font(.headline)
+                        .foregroundStyle(Theme.ink)
+
+                    instruction(number: 1, text: "Ask the person to privately message /myid to the parent-support bot.")
+                    instruction(number: 2, text: "Enter the name and numeric chat ID returned by the bot.")
+                    instruction(number: 3, text: "The app sends a verification message before enabling notifications.")
+                }
+                .padding(.vertical, 5)
+            }
+
+            if environmentAdministratorConfigured {
+                Section {
+                    Label {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Primary administrator protected")
+                                .font(.body.weight(.semibold))
+                            Text("The administrator configured in Vercel remains active and cannot be removed here.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                    } icon: {
+                        Image(systemName: "checkmark.shield.fill")
+                            .foregroundStyle(Theme.green)
+                    }
+                }
+            }
+
+            Section {
+                NavigationLink {
+                    AddTelegramSupportAdministratorView {
+                        await loadAdministrators()
+                    }
+                } label: {
+                    Label("Add Telegram Administrator", systemImage: "person.badge.plus")
+                }
+            }
+
+            Section {
+                if loading && administrators.isEmpty {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading Telegram administrators…")
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                } else if administrators.isEmpty {
+                    ContentUnavailableView(
+                        "No Additional Administrators",
+                        systemImage: "person.2.slash",
+                        description: Text("Use Add Telegram Administrator to connect another recipient.")
+                    )
+                } else {
+                    ForEach(administrators) { administrator in
+                        administratorRow(administrator)
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Added Administrators")
+                    Spacer()
+                    if !administrators.isEmpty {
+                        Text("\(activeCount) active")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    DataRefreshButton(scope: "Telegram administrators") {
+                        await loadAdministrators()
+                    }
+                }
+            } footer: {
+                Text("These accounts receive parent-support escalation notifications. Website roles are managed separately.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Theme.background)
+        .navigationTitle("Telegram Administrators")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await loadAdministrators()
+        }
+        .alert(
+            "Remove Telegram Administrator?",
+            isPresented: $showRemovalConfirmation,
+            presenting: pendingRemoval
+        ) { administrator in
+            Button("Remove", role: .destructive) {
+                Task { await remove(administrator) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { administrator in
+            Text("\(administrator.displayName) will stop receiving parent-support notifications.")
+        }
+    }
+
+    @ViewBuilder
+    private func administratorRow(_ administrator: TelegramSupportAdministrator) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "paperplane.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(Theme.blue, in: RoundedRectangle(cornerRadius: 11))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(administrator.displayName)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(administrator.maskedChatID)
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+
+            Spacer(minLength: 8)
+
+            StatusBadge(
+                text: administrator.active ? "Active" : "Disabled",
+                color: administrator.active ? Theme.green : Theme.secondaryText
+            )
+
+            Menu {
+                Button {
+                    Task { await setActive(!administrator.active, for: administrator) }
+                } label: {
+                    Label(
+                        administrator.active ? "Disable Notifications" : "Enable Notifications",
+                        systemImage: administrator.active ? "bell.slash" : "bell"
+                    )
+                }
+
+                Button(role: .destructive) {
+                    pendingRemoval = administrator
+                    showRemovalConfirmation = true
+                } label: {
+                    Label("Remove Administrator", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .frame(width: 38, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Actions for \(administrator.displayName)")
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func instruction(number: Int, text: String) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Text("\(number)")
+                .font(.caption.bold())
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Theme.blue, in: Circle())
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func loadAdministrators() async {
+        guard state.role == .superuser, !loading else { return }
+        loading = true
+        defer { loading = false }
+
+        do {
+            let response = try await BackendClient.shared.websiteJSON(
+                path: "/api/support/telegram-admins"
+            )
+            let object = response.object ?? [:]
+            administrators = object["admins"]?.array?
+                .compactMap(\.object)
+                .compactMap(TelegramSupportAdministrator.init(values:))
+                .sorted {
+                    if $0.active != $1.active { return $0.active && !$1.active }
+                    return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+                } ?? []
+            environmentAdministratorConfigured = object.flag("environmentAdminConfigured")
+        } catch {
+            state.show(error)
+        }
+    }
+
+    private func setActive(
+        _ active: Bool,
+        for administrator: TelegramSupportAdministrator
+    ) async {
+        let activity = state.beginActivity(
+            active ? "Enabling Telegram administrator…" : "Disabling Telegram administrator…"
+        )
+        defer { state.endActivity(activity) }
+
+        do {
+            _ = try await BackendClient.shared.websiteJSON(
+                path: "/api/support/telegram-admins",
+                method: "POST",
+                body: [
+                    "action": .string("set_active"),
+                    "id": .string(administrator.id),
+                    "active": .bool(active)
+                ]
+            )
+            state.show("\(administrator.displayName) was \(active ? "enabled" : "disabled").")
+            await loadAdministrators()
+        } catch {
+            state.show(error)
+        }
+    }
+
+    private func remove(_ administrator: TelegramSupportAdministrator) async {
+        let activity = state.beginActivity("Removing Telegram administrator…")
+        defer { state.endActivity(activity) }
+
+        do {
+            _ = try await BackendClient.shared.websiteJSON(
+                path: "/api/support/telegram-admins",
+                method: "POST",
+                body: [
+                    "action": .string("remove"),
+                    "id": .string(administrator.id)
+                ]
+            )
+            pendingRemoval = nil
+            state.show("\(administrator.displayName) was removed.")
+            await loadAdministrators()
+        } catch {
+            state.show(error)
+        }
+    }
+}
+
+private struct AddTelegramSupportAdministratorView: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let onAdded: () async -> Void
+
+    @State private var displayName = ""
+    @State private var chatID = ""
+    @State private var errorMessage = ""
+
+    private var normalizedName: String {
+        displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var normalizedChatID: String {
+        chatID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var validChatID: Bool {
+        normalizedChatID.range(
+            of: #"^-?[0-9]{5,20}$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    private var canSubmit: Bool {
+        !normalizedName.isEmpty && normalizedName.count <= 80 && validChatID
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Label {
+                    Text("The person must privately send /myid to the parent-support bot before you add them.")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                } icon: {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(Theme.blue)
+                }
+            }
+
+            Section("Administrator") {
+                TextField("Display name", text: $displayName)
+                    .textContentType(.name)
+                    .textInputAutocapitalization(.words)
+
+                TextField("Telegram chat ID", text: $chatID)
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+
+            if !errorMessage.isEmpty {
+                Section {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.red)
+                }
+            }
+
+            Section {
+                AsyncActionButton(
+                    title: "Add Telegram Administrator",
+                    progressTitle: "Verifying with Telegram…",
+                    icon: "paperplane.fill",
+                    disabled: !canSubmit
+                ) {
+                    await addAdministrator()
+                }
+            } footer: {
+                Text("Telegram sends a confirmation message before the account is enabled.")
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.background)
+        .navigationTitle("Add Administrator")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func addAdministrator() async {
+        guard state.role == .superuser else {
+            errorMessage = "Superuser access is required."
+            return
+        }
+
+        errorMessage = ""
+        do {
+            _ = try await BackendClient.shared.websiteJSON(
+                path: "/api/support/telegram-admins",
+                method: "POST",
+                body: [
+                    "action": .string("add"),
+                    "displayName": .string(normalizedName),
+                    "chatId": .string(normalizedChatID)
+                ]
+            )
+            await onAdded()
+            state.show("\(normalizedName) is now receiving Telegram support notifications.")
+            dismiss()
+        } catch {
+            guard !error.isExpectedCancellation else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 }
 
