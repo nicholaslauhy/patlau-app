@@ -53,22 +53,26 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
     case weekendDashboard
     case weekendAddStudent
     case weekendAttendance
+    case weekendAttendanceReport
     case weekendPayment
     case coachAttendance
 
     case weekdayDashboard
     case weekdayAddStudent
     case weekdayAttendance
+    case weekdayAttendanceReport
     case weekdayPayment
 
     case matchplayOverview
     case matchplayAddStudent
     case matchplayAttendance
+    case matchplayAttendanceReport
     case matchplayPayment
 
     case oneToOneDashboard
     case oneToOneAddStudent
     case oneToOneTraining
+    case oneToOneAttendanceReport
     case oneToOnePayment
 
     case makeupCredits
@@ -85,14 +89,17 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
     var group: OperationGroup {
         switch self {
         case .weekendDashboard, .weekendAddStudent, .weekendAttendance,
+             .weekendAttendanceReport,
              .weekendPayment, .coachAttendance:
             .weekend
-        case .weekdayDashboard, .weekdayAddStudent, .weekdayAttendance, .weekdayPayment:
+        case .weekdayDashboard, .weekdayAddStudent, .weekdayAttendance,
+             .weekdayAttendanceReport, .weekdayPayment:
             .weekday
         case .matchplayOverview, .matchplayAddStudent, .matchplayAttendance,
-             .matchplayPayment:
+             .matchplayAttendanceReport, .matchplayPayment:
             .matchplay
-        case .oneToOneDashboard, .oneToOneAddStudent, .oneToOneTraining, .oneToOnePayment:
+        case .oneToOneDashboard, .oneToOneAddStudent, .oneToOneTraining,
+             .oneToOneAttendanceReport, .oneToOnePayment:
             .oneToOne
         case .makeupCredits, .makeupPayment:
             .makeup
@@ -108,19 +115,23 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
         case .weekendDashboard: "Weekend Dashboard"
         case .weekendAddStudent: "Add Weekend Student"
         case .weekendAttendance: "Weekend Attendance"
+        case .weekendAttendanceReport: "Weekend Session Reports"
         case .weekendPayment: "Weekend Payments"
         case .coachAttendance: "Coach Attendance Poll"
         case .weekdayDashboard: "Weekday Dashboard"
         case .weekdayAddStudent: "Add Weekday Student"
         case .weekdayAttendance: "Weekday Attendance"
+        case .weekdayAttendanceReport: "Weekday Session Reports"
         case .weekdayPayment: "Weekday Payments"
         case .matchplayOverview: "MatchPlay Dashboard"
         case .matchplayAddStudent: "Add MatchPlay Student"
         case .matchplayAttendance: "MatchPlay Attendance"
+        case .matchplayAttendanceReport: "MatchPlay Session Reports"
         case .matchplayPayment: "MatchPlay Payments"
         case .oneToOneDashboard: "1-1 Student Dashboard"
         case .oneToOneAddStudent: "Add 1-1 Student"
         case .oneToOneTraining: "1-1 Training & Attendance"
+        case .oneToOneAttendanceReport: "1-1 Session Reports"
         case .oneToOnePayment: "1-1 Payments"
         case .makeupCredits: "My Makeup"
         case .makeupPayment: "Makeup Payments"
@@ -137,19 +148,23 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
         case .weekendDashboard: "Manage student details, pricing and course settings"
         case .weekendAddStudent: "Create a new weekend training record"
         case .weekendAttendance: "Mark attended, missed or makeup and undo the latest action"
+        case .weekendAttendanceReport: "Review recorded students by date and Weekend session"
         case .weekendPayment: "Review and record weekend payments"
         case .coachAttendance: "Send the Telegram availability poll to coaches"
         case .weekdayDashboard: "View and manage Weekday students"
         case .weekdayAddStudent: "Create weekday schedules and hourly rates"
         case .weekdayAttendance: "Record attendance by weekday session"
+        case .weekdayAttendanceReport: "Review recorded students by date and Weekday session"
         case .weekdayPayment: "Review monthly weekday payments"
         case .matchplayOverview: "Open the MatchPlay management hub"
         case .matchplayAddStudent: "Create a MatchPlay training record"
         case .matchplayAttendance: "Record MatchPlay attendance and makeups"
+        case .matchplayAttendanceReport: "Review recorded students for each MatchPlay session"
         case .matchplayPayment: "Review MatchPlay payment records"
         case .oneToOneDashboard: "View and manage 1-1 students"
         case .oneToOneAddStudent: "Add a student to the 1-1 programme"
         case .oneToOneTraining: "Add or remove pairs and update 1-1 attendance"
+        case .oneToOneAttendanceReport: "Review 1-1 results with student and coach details"
         case .oneToOnePayment: "Review 1-1 training payments"
         case .makeupCredits: "Track available credits, recent usage and credit history"
         case .makeupPayment: "Manage makeup top-up payments"
@@ -168,6 +183,8 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
         case .weekendAddStudent, .weekdayAddStudent, .matchplayAddStudent,
              .oneToOneAddStudent: "Add Student"
         case .weekendAttendance, .weekdayAttendance, .matchplayAttendance: "Attendance"
+        case .weekendAttendanceReport, .weekdayAttendanceReport,
+             .matchplayAttendanceReport, .oneToOneAttendanceReport: "Session Reports"
         case .weekendPayment, .weekdayPayment, .matchplayPayment,
              .oneToOnePayment, .makeupPayment: "Payment"
         case .coachAttendance: "Coach Attendance"
@@ -191,6 +208,9 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
             "person.badge.plus"
         case .weekendAttendance, .weekdayAttendance, .matchplayAttendance:
             "checkmark.circle.fill"
+        case .weekendAttendanceReport, .weekdayAttendanceReport,
+             .matchplayAttendanceReport, .oneToOneAttendanceReport:
+            "list.clipboard.fill"
         case .weekendPayment, .weekdayPayment, .matchplayPayment,
              .oneToOnePayment, .makeupPayment:
             "dollarsign.circle.fill"
@@ -221,19 +241,23 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
         case .weekendDashboard: "/attendance"
         case .weekendAddStudent: "/add"
         case .weekendAttendance: "/dashboard"
+        case .weekendAttendanceReport: "/app/weekend/session-reports"
         case .weekendPayment: "/payment"
         case .coachAttendance: "/coachattendance"
         case .weekdayDashboard: "/weekday"
         case .weekdayAddStudent: "/weekday/add"
         case .weekdayAttendance: "/weekday/attendance"
+        case .weekdayAttendanceReport: "/app/weekday/session-reports"
         case .weekdayPayment: "/weekday/payment"
         case .matchplayOverview: "/matchplay"
         case .matchplayAddStudent: "/matchplay/add"
         case .matchplayAttendance: "/matchplay/attendance"
+        case .matchplayAttendanceReport: "/app/matchplay/session-reports"
         case .matchplayPayment: "/matchplay/payment"
         case .oneToOneDashboard: "/training/students"
         case .oneToOneAddStudent: "/training/add"
         case .oneToOneTraining: "/training"
+        case .oneToOneAttendanceReport: "/app/training/session-reports"
         case .oneToOnePayment: "/trngpayment"
         case .makeupCredits: "/makeup"
         case .makeupPayment: "/makeup/payment"
@@ -252,10 +276,10 @@ enum PortalOperation: String, CaseIterable, Identifiable, Hashable {
 
     var allowedRoles: Set<UserRole> {
         switch self {
-        case .weekendAttendance, .myAttendance, .settings:
+        case .weekendAttendance, .weekendAttendanceReport, .myAttendance, .settings:
             [.member, .admin, .superuser]
         case .weekendAddStudent, .oneToOneAddStudent, .oneToOneTraining,
-             .coachAttendance:
+             .oneToOneAttendanceReport, .coachAttendance:
             [.admin, .superuser]
         default:
             [.superuser]

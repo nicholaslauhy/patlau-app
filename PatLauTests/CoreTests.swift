@@ -180,6 +180,133 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testWeekendSessionReportsGroupCurrentResultByDateAndSession() {
+        let students = [
+            DynamicRecord(values: [
+                "student_id": .string("student-1"),
+                "student_name": .string("Brendan Lau"),
+                "student_day": .string("Saturday"),
+                "student_timeslot": .string("2-4pm"),
+                "attendance_records": .array([
+                    .string("2026-07-19T08:00:00Z|missed"),
+                    .string("2026-07-19T08:05:00Z"),
+                    .string("2026-07-20T08:00:00Z|makeup||weekday")
+                ])
+            ]),
+            DynamicRecord(values: [
+                "student_id": .string("student-2"),
+                "student_name": .string("Nicholas Lau"),
+                "student_day": .string("Saturday"),
+                "student_timeslot": .string("2-4pm"),
+                "attendance_records": .array([
+                    .string("2026-07-19T08:10:00Z|missed")
+                ])
+            ])
+        ]
+
+        let entries = SessionAttendanceReportBuilder.entries(
+            programme: .weekend,
+            students: students
+        )
+
+        XCTAssertEqual(entries.count, 3)
+        XCTAssertEqual(
+            entries.first {
+                $0.dateKey == "2026-07-19" && $0.studentName == "Brendan Lau"
+            }?.status,
+            .attended
+        )
+        XCTAssertEqual(
+            entries.first { $0.status == .makeup }?.detail,
+            "Makeup programme: Weekday"
+        )
+
+        let sections = SessionAttendanceReportBuilder.sections(from: entries)
+        XCTAssertEqual(sections.count, 2)
+        XCTAssertTrue(sections.allSatisfy { $0.sessionTitle == "Saturday • 2-4pm" })
+    }
+
+    func testWeekdayAndMatchPlaySessionReportsResolveStudentNames() {
+        let weekdayStudent = DynamicRecord(values: [
+            "id": .string("weekday-1"),
+            "student_name": .string("Brandon Teo")
+        ])
+        let weekdayAttendance = DynamicRecord(values: [
+            "id": .string("weekday-attendance-1"),
+            "weekday_student_id": .string("weekday-1"),
+            "attendance_date": .string("2026-07-22"),
+            "day_name": .string("Wednesday"),
+            "duration_hours": .number(2),
+            "status": .string("attended"),
+            "updated_at": .string("2026-07-22T10:00:00Z")
+        ])
+
+        let weekday = SessionAttendanceReportBuilder.entries(
+            programme: .weekday,
+            students: [weekdayStudent],
+            attendanceRecords: [weekdayAttendance]
+        )
+        XCTAssertEqual(weekday.first?.studentName, "Brandon Teo")
+        XCTAssertEqual(weekday.first?.sessionTitle, "Wednesday • 2h session")
+
+        let matchPlayStudent = DynamicRecord(values: [
+            "id": .string("matchplay-1"),
+            "student_name": .string("Ota Ena")
+        ])
+        let matchPlayAttendance = DynamicRecord(values: [
+            "id": .string("matchplay-attendance-1"),
+            "matchplay_student_id": .string("matchplay-1"),
+            "attendance_date": .string("2026-07-22"),
+            "status": .string("missed")
+        ])
+        let matchPlay = SessionAttendanceReportBuilder.entries(
+            programme: .matchplay,
+            students: [matchPlayStudent],
+            attendanceRecords: [matchPlayAttendance]
+        )
+        XCTAssertEqual(matchPlay.first?.studentName, "Ota Ena")
+        XCTAssertEqual(matchPlay.first?.sessionTitle, "MatchPlay session")
+        XCTAssertEqual(matchPlay.first?.status, .missed)
+    }
+
+    func testOneToOneSessionReportsIncludeCoachAndExcludeScheduledPairs() {
+        let student = DynamicRecord(values: [
+            "id": .string("student-1"),
+            "student_name": .string("Ota Ena")
+        ])
+        let coach = DynamicRecord(values: [
+            "id": .string("coach-1"),
+            "user_metadata": .object(["name": .string("Patrick Lau")])
+        ])
+        let marked = DynamicRecord(values: [
+            "id": .string("session-1"),
+            "student_id": .string("student-1"),
+            "coach_id": .string("coach-1"),
+            "session_date": .string("2026-07-26"),
+            "attendance_status": .string("attended"),
+            "attendance_updated_at": .string("2026-07-26T09:00:00Z")
+        ])
+        let scheduled = DynamicRecord(values: [
+            "id": .string("session-2"),
+            "student_id": .string("student-1"),
+            "coach_id": .string("coach-1"),
+            "session_date": .string("2026-08-02"),
+            "attendance_status": .string("scheduled")
+        ])
+
+        let entries = SessionAttendanceReportBuilder.entries(
+            programme: .oneToOne,
+            students: [student],
+            sessions: [marked, scheduled],
+            coaches: [coach]
+        )
+
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries.first?.studentName, "Ota Ena")
+        XCTAssertEqual(entries.first?.detail, "Coach: Patrick Lau")
+        XCTAssertEqual(entries.first?.sessionTitle, "1-1 Training")
+    }
+
     func testAttendanceRecordFilterSupportsOneDateAndAllRecords() {
         let selectedDate = "2026-07-21"
 
@@ -295,13 +422,17 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(PortalOperation.allCases.allSatisfy { !$0.allowedRoles.isEmpty })
         XCTAssertEqual(
             Set(PortalOperation.visible(for: .member)),
-            Set([.weekendAttendance, .myAttendance, .settings])
+            Set([
+                .weekendAttendance, .weekendAttendanceReport,
+                .myAttendance, .settings
+            ])
         )
         XCTAssertEqual(
             Set(PortalOperation.visible(for: .admin)),
             Set([
                 .weekendAddStudent, .weekendAttendance, .coachAttendance,
-                .oneToOneAddStudent, .oneToOneTraining,
+                .weekendAttendanceReport,
+                .oneToOneAddStudent, .oneToOneTraining, .oneToOneAttendanceReport,
                 .myAttendance, .settings
             ])
         )

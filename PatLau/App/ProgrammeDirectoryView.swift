@@ -53,6 +53,8 @@ struct NativeOperationDestination: View {
             AddStudentPage(programme: .weekend, showsDashboardAfterSave: state.role == .superuser)
         case .weekendAttendance:
             AttendanceView(initialProgramme: .weekend, showsProgrammePicker: false)
+        case .weekendAttendanceReport:
+            SessionAttendanceReportView(programme: .weekend)
         case .weekendPayment:
             PaymentsView(initialProgramme: .weekend, showsProgrammePicker: false)
         case .coachAttendance:
@@ -63,6 +65,8 @@ struct NativeOperationDestination: View {
             AddStudentPage(programme: .weekday, showsDashboardAfterSave: state.role == .superuser)
         case .weekdayAttendance:
             AttendanceView(initialProgramme: .weekday, showsProgrammePicker: false)
+        case .weekdayAttendanceReport:
+            SessionAttendanceReportView(programme: .weekday)
         case .weekdayPayment:
             PaymentsView(initialProgramme: .weekday, showsProgrammePicker: false)
         case .matchplayOverview:
@@ -71,6 +75,8 @@ struct NativeOperationDestination: View {
             AddStudentPage(programme: .matchplay, showsDashboardAfterSave: state.role == .superuser)
         case .matchplayAttendance:
             AttendanceView(initialProgramme: .matchplay, showsProgrammePicker: false)
+        case .matchplayAttendanceReport:
+            SessionAttendanceReportView(programme: .matchplay)
         case .matchplayPayment:
             PaymentsView(initialProgramme: .matchplay, showsProgrammePicker: false)
         case .oneToOneDashboard:
@@ -79,6 +85,8 @@ struct NativeOperationDestination: View {
             AddStudentPage(programme: .oneToOne, showsDashboardAfterSave: state.role == .superuser)
         case .oneToOneTraining:
             TrainingView()
+        case .oneToOneAttendanceReport:
+            SessionAttendanceReportView(programme: .oneToOne)
         case .oneToOnePayment:
             PaymentsView(initialProgramme: .oneToOne, showsProgrammePicker: false)
         case .makeupCredits:

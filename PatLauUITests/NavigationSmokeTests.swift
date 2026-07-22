@@ -47,6 +47,33 @@ final class NavigationSmokeTests: XCTestCase {
         }
     }
 
+    func testSessionAttendanceReportShowsDailyStudentsAndSummary() throws {
+        let app = launchApp(arguments: [
+            "-uiTestingRole=member",
+            "-uiTestingSessionReports"
+        ])
+
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        app.staticTexts["Weekend"].tap()
+
+        let reports = app.staticTexts["Weekend Session Reports"]
+        XCTAssertTrue(reports.waitForExistence(timeout: 4))
+        reports.tap()
+
+        XCTAssertTrue(app.navigationBars["Session Reports"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Weekend Attendance Report"].exists)
+        XCTAssertTrue(app.segmentedControls.buttons["Selected day"].exists)
+        XCTAssertTrue(app.segmentedControls.buttons["All records"].exists)
+        XCTAssertTrue(app.otherElements["attendance-report-summary"].exists)
+        XCTAssertTrue(app.staticTexts["Saturday • 2-4pm"].exists)
+        XCTAssertTrue(app.staticTexts["Brendan Lau"].exists)
+        XCTAssertTrue(app.staticTexts["Nicholas Lau"].exists)
+        XCTAssertTrue(app.staticTexts["Attended"].exists)
+        XCTAssertTrue(app.staticTexts["Missed"].exists)
+        XCTAssertTrue(app.buttons["Refresh Weekend session reports"].exists)
+        keepScreenshot(of: app, name: "Weekend Session Attendance Report")
+    }
+
     func testWeekendAttendanceFailureAppearsAboveActionSheet() throws {
         let app = launchApp(arguments: ["-uiTestingAttendanceError"])
 

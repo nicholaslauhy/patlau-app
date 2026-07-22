@@ -199,7 +199,7 @@ enum Programme: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
 }
 
-enum AttendanceStatus: String, CaseIterable {
+enum AttendanceStatus: String, CaseIterable, Hashable, Sendable {
     case scheduled
     case attended
     case missed
