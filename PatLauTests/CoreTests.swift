@@ -122,6 +122,52 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(Date(timeIntervalSince1970: 0).monthKey.count, 7)
     }
 
+    func testWeekdayMonthlyDashboardUsesTheSameCalendarMathAsPayments() throws {
+        let july2026 = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-15T12:00:00Z")
+        )
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let schedules: [JSONObject] = [
+            ["day": .string("Wednesday"), "duration_hours": .number(2)],
+            ["day": .string("Thursday"), "duration_hours": .number(1)]
+        ]
+
+        let summary = WeekdayMonthlyPaymentCalculator.summary(
+            schedules: schedules,
+            hourlyRate: 80,
+            month: july2026,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.sessionCount, 10)
+        XCTAssertEqual(summary.payableHours, 15)
+        XCTAssertEqual(summary.amount, 1_200)
+    }
+
+    func testWeekdayMonthlyCalculationHonoursPaymentHourAdjustments() throws {
+        let july2026 = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-15T12:00:00Z")
+        )
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let schedules: [JSONObject] = [
+            ["day": .string("Wednesday"), "duration_hours": .number(2)],
+            ["day": .string("Thursday"), "duration_hours": .number(1)]
+        ]
+
+        let summary = WeekdayMonthlyPaymentCalculator.summary(
+            schedules: schedules,
+            hourlyRate: 80,
+            month: july2026,
+            manualHoursByDay: ["Wednesday": 8, "Thursday": 4],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(summary.payableHours, 12)
+        XCTAssertEqual(summary.amount, 960)
+    }
+
     func testWeekendTimeslotsAreRestrictedByTrainingDay() {
         XCTAssertEqual(WeekendSchedule.timeslots(for: "Saturday"), ["2-4pm", "4-6pm"])
         XCTAssertEqual(
@@ -177,6 +223,85 @@ final class CoreTests: XCTestCase {
                 today: "Tuesday"
             ),
             "Brendan Lau does not have a Weekend training day assigned. Update the student's schedule before marking attendance."
+        )
+    }
+
+    func testHistoricalAttendanceAcceptsOnlyTheStudentsScheduledDay() throws {
+        let saturday = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-18T12:00:00Z")
+        )
+        let sunday = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-19T12:00:00Z")
+        )
+        let now = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-22T12:00:00Z")
+        )
+
+        XCTAssertNil(
+            HistoricalAttendancePolicy.validationError(
+                studentName: "Brendan Lau",
+                scheduledDays: ["Saturday"],
+                selectedDate: saturday,
+                now: now
+            )
+        )
+        XCTAssertEqual(
+            HistoricalAttendancePolicy.validationError(
+                studentName: "Brendan Lau",
+                scheduledDays: ["Saturday"],
+                selectedDate: sunday,
+                now: now
+            ),
+            "Brendan Lau is scheduled for Saturday. The selected date is a Sunday, so attendance cannot be recorded for that lesson."
+        )
+    }
+
+    func testHistoricalAttendanceRejectsFutureDatesAndDuplicateLessonDates() throws {
+        let future = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-25T12:00:00Z")
+        )
+        let now = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-22T12:00:00Z")
+        )
+        XCTAssertEqual(
+            HistoricalAttendancePolicy.validationError(
+                studentName: "Brendan Lau",
+                scheduledDays: ["Saturday"],
+                selectedDate: future,
+                now: now
+            ),
+            "Attendance cannot be recorded for a future date."
+        )
+        XCTAssertTrue(
+            HistoricalAttendancePolicy.containsRecord(
+                on: "2026-07-18",
+                history: [
+                    .string("2026-07-18T03:30:00Z"),
+                    .string("2026-07-11T03:30:00Z|missed")
+                ]
+            )
+        )
+        XCTAssertFalse(
+            HistoricalAttendancePolicy.containsRecord(
+                on: "2026-07-04",
+                history: [.string("2026-07-11T03:30:00Z|missed")]
+            )
+        )
+    }
+
+    func testHistoricalAttendanceTimestampUsesTheActualLessonDate() throws {
+        let lessonDate = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-18T12:00:00Z")
+        )
+        let recordedAt = try XCTUnwrap(
+            ISO8601DateFormatter().date(from: "2026-07-22T03:45:00Z")
+        )
+        XCTAssertEqual(
+            HistoricalAttendancePolicy.timestamp(
+                for: lessonDate,
+                recordedAt: recordedAt
+            ),
+            "2026-07-18T03:45:00Z"
         )
     }
 

@@ -113,6 +113,89 @@ final class NavigationSmokeTests: XCTestCase {
         keepScreenshot(of: app, name: "Attendance Error Alert")
     }
 
+    func testAttendanceCanChooseAnEarlierLessonDate() throws {
+        let app = launchApp(arguments: [
+            "-uiTestingRole=member",
+            "-uiTestingAttendanceError"
+        ])
+
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        app.staticTexts["Weekend"].tap()
+        XCTAssertTrue(app.staticTexts["Weekend Attendance"].waitForExistence(timeout: 4))
+        app.staticTexts["Weekend Attendance"].tap()
+
+        let attendanceAction = app.staticTexts["Tap to update attendance"].firstMatch
+        XCTAssertTrue(attendanceAction.waitForExistence(timeout: 5))
+        attendanceAction.tap()
+
+        let anotherDate = app.buttons["mark-attended-another-date"]
+        XCTAssertTrue(anotherDate.waitForExistence(timeout: 4))
+        anotherDate.tap()
+
+        XCTAssertTrue(app.staticTexts["Mark Another Date"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Historical attendance"].exists)
+        XCTAssertTrue(app.datePickers["historical-attendance-date-picker"].exists)
+        XCTAssertTrue(app.buttons["confirm-historical-attendance"].exists)
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'Choose the actual lesson date'")
+            ).firstMatch.exists
+        )
+        keepScreenshot(of: app, name: "Historical Attendance Date")
+    }
+
+    func testWeekdayAttendanceCanShowOneDateOrAllScheduledDays() throws {
+        let app = launchApp(arguments: [
+            "-uiTestingRole=superuser",
+            "-uiTestingWeekdayAttendance"
+        ])
+
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        app.staticTexts["Weekday"].tap()
+        XCTAssertTrue(app.staticTexts["Weekday Attendance"].waitForExistence(timeout: 4))
+        app.staticTexts["Weekday Attendance"].tap()
+
+        XCTAssertTrue(app.navigationBars["Attendance"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.datePickers["attendance-lesson-date"].exists)
+        let scope = app.segmentedControls["weekday-attendance-scope"]
+        XCTAssertTrue(scope.buttons["Selected date"].exists)
+        XCTAssertTrue(scope.buttons["All scheduled days"].exists)
+
+        scope.buttons["All scheduled days"].tap()
+        XCTAssertTrue(app.buttons["Monday"].exists)
+        XCTAssertTrue(app.buttons["Wednesday"].exists)
+        XCTAssertTrue(app.buttons["Thursday"].exists)
+        XCTAssertTrue(app.staticTexts["Brandon Teo"].exists)
+        XCTAssertTrue(app.staticTexts["Monday Student"].exists)
+
+        app.buttons["Wednesday"].tap()
+        XCTAssertTrue(app.staticTexts["Brandon Teo"].exists)
+        XCTAssertFalse(app.staticTexts["Monday Student"].exists)
+        XCTAssertTrue(app.staticTexts["Wednesday · 2 hours"].exists)
+        keepScreenshot(of: app, name: "Weekday Attendance Filters")
+    }
+
+    func testWeekdayDashboardMatchesJulyMonthlyPaymentCalculation() throws {
+        let app = launchApp(arguments: [
+            "-uiTestingRole=superuser",
+            "-uiTestingWeekdayDashboard"
+        ])
+
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        app.staticTexts["Weekday"].tap()
+        XCTAssertTrue(app.staticTexts["Weekday Dashboard"].waitForExistence(timeout: 4))
+        app.staticTexts["Weekday Dashboard"].tap()
+
+        XCTAssertTrue(app.navigationBars["Weekday Dashboard"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Brandon Teo"].exists)
+        XCTAssertTrue(app.staticTexts["Monthly Payable Hours"].exists)
+        XCTAssertTrue(app.staticTexts["15"].exists)
+        XCTAssertTrue(app.staticTexts["Total Payment Amount"].exists)
+        XCTAssertTrue(app.staticTexts["1200"].exists)
+        XCTAssertTrue(app.staticTexts["July 2026"].exists)
+        keepScreenshot(of: app, name: "Weekday Dashboard Monthly Total")
+    }
+
     func testLongDirectoryCanScrollItsLastRecordAboveTheTabBar() throws {
         let app = launchApp(arguments: [
             "-uiTestingRole=member",
@@ -421,6 +504,28 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Account"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Website"].exists)
         XCTAssertFalse(app.staticTexts["Website"].exists)
+    }
+
+    func testTelegramAdministratorManagementIsSuperuserOnly() throws {
+        let superuserApp = launchApp(arguments: ["-uiTestingRole=superuser"])
+
+        XCTAssertTrue(superuserApp.navigationBars["Home"].waitForExistence(timeout: 5))
+        superuserApp.tabBars.buttons["Account"].tap()
+        XCTAssertTrue(superuserApp.navigationBars["Account"].waitForExistence(timeout: 5))
+
+        let manager = superuserApp.staticTexts["Telegram Administrators"]
+        XCTAssertTrue(manager.waitForExistence(timeout: 4))
+        manager.tap()
+        XCTAssertTrue(superuserApp.navigationBars["Telegram Administrators"].waitForExistence(timeout: 4))
+        XCTAssertTrue(superuserApp.staticTexts["How to connect an account"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["Add Telegram Administrator"].exists)
+        superuserApp.terminate()
+
+        let memberApp = launchApp(arguments: ["-uiTestingRole=member"])
+        XCTAssertTrue(memberApp.navigationBars["Home"].waitForExistence(timeout: 5))
+        memberApp.tabBars.buttons["Account"].tap()
+        XCTAssertTrue(memberApp.navigationBars["Account"].waitForExistence(timeout: 5))
+        XCTAssertFalse(memberApp.staticTexts["Telegram Administrators"].exists)
     }
 
     func testAddStudentIsAStandalonePage() throws {
