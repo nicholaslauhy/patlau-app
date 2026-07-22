@@ -79,6 +79,19 @@ struct RootView: View {
         .onChange(of: state.role) { _, role in
             homePath.removeAll { !$0.isAvailable(for: role) }
             operationsPath.removeAll { !$0.isAvailable(for: role) }
+            openPendingConversationIfPossible()
+        }
+        .onChange(of: state.pendingConversationID) { _, _ in
+            openPendingConversationIfPossible()
+        }
+        .onChange(of: state.isResolvingRole) { _, _ in
+            openPendingConversationIfPossible()
+        }
+        .onChange(of: state.hasResolvedAccount) { _, _ in
+            openPendingConversationIfPossible()
+        }
+        .task {
+            openPendingConversationIfPossible()
         }
     }
 
@@ -98,7 +111,37 @@ struct RootView: View {
                 AccessDeniedView(operation: operation)
                     .appNoticeHost()
             }
+        case .supportConversation(let conversationID):
+            if state.role == .superuser {
+                SupportConversationDeepLinkView(conversationID: conversationID)
+                    .appTabBarClearance()
+                    .appNoticeHost()
+            } else {
+                ContentUnavailableView {
+                    Label("Superuser Access Required", systemImage: "lock.shield")
+                } description: {
+                    Text("Parent chats contain private support conversations.")
+                }
+                .navigationTitle("Chats")
+            }
         }
+    }
+
+    private func openPendingConversationIfPossible() {
+        guard state.pendingConversationID != nil,
+              !state.isResolvingRole,
+              state.hasResolvedAccount else { return }
+        guard state.role == .superuser else {
+            _ = state.takePendingConversationID()
+            state.show("Superuser access is required to open parent conversations.", kind: .error)
+            return
+        }
+        guard let conversationID = state.takePendingConversationID() else { return }
+        selectedTab = .operations
+        operationsPath = [
+            .operation(.chats),
+            .supportConversation(conversationID)
+        ]
     }
 }
 
@@ -109,6 +152,8 @@ private extension AppRoute {
             !PortalOperation.visible(for: role, in: group).isEmpty
         case .operation(let operation):
             operation.isAvailable(for: role)
+        case .supportConversation:
+            role == .superuser
         }
     }
 }

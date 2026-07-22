@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 @main
 struct PatLauApp: App {
@@ -13,6 +14,13 @@ struct PatLauApp: App {
             .environmentObject(state)
             .tint(Theme.blue)
             .preferredColorScheme(.light)
+            .onOpenURL { url in
+                _ = state.handleIncomingURL(url)
+            }
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                guard let url = activity.webpageURL else { return }
+                _ = state.handleIncomingURL(url)
+            }
         }
     }
 }

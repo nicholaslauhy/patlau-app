@@ -8,11 +8,12 @@ Included workflows cover role-aware login, all four programmes, students, attend
 
 1. Install Xcode 16 or newer on a Mac.
 2. Install XcodeGen (`brew install xcodegen`).
-3. Edit `PatLau/Core/AppConfiguration.swift` and set your Supabase project URL and publishable/anon key.
+3. Confirm `PatLau/Core/AppConfiguration.swift` points to the PatLau Supabase project and `https://patlaubmt.vercel.app`.
 4. In this folder run `python3 Scripts/validate_project.py`, then `xcodegen generate`.
 5. Open `PatLau.xcodeproj` in Xcode.
-6. Select your Apple Development team under Signing & Capabilities.
-7. Run on an iPhone simulator, then on a real iPhone.
+6. Confirm the PatLau target uses your Personal Team with automatic signing enabled. This free-signing build intentionally uses no restricted capabilities.
+7. Deploy the matching website app-link bridge before testing parent-support notification links on a real device.
+8. Run on an iPhone simulator, then install the signed build on a real iPhone.
 
 The Supabase service-role key, Telegram tokens, OpenAI key, and webhook secrets must never be added to this app. Those remain only on Vercel/server-side.
 
@@ -28,6 +29,7 @@ The project is validated with its structural checker, Xcode builds, unit tests, 
 - Primary actions use a minimum 50-point touch target.
 - Search, status badges, pull-to-refresh, confirmation dialogs, and dismissible notices are shared throughout.
 - Server-only features—including Telegram chat replies, payment notices, and coach polls—call the same authenticated PatLau endpoints as the website.
+- Parent-support escalation notifications use the free-signing-compatible `patlau://chats` URL scheme to open the exact native conversation after login and protected-role verification. The HTTPS notification link first opens a small website bridge so users without the app can continue on the website.
 - A clearly labelled Full Website button remains available as an in-app fallback for authorised website tools.
 
 ## Supabase
@@ -46,3 +48,5 @@ xcodebuild -project PatLau.xcodeproj -scheme PatLau -sdk iphonesimulator \
 ```
 
 Then run Product → Test in Xcode and complete `MANUAL_TEST_CHECKLIST.md` with non-production test accounts.
+
+The app registers `patlau` under `CFBundleURLTypes`; it does not request the Associated Domains entitlement, so a free Apple Personal Team can provision it. Test with `xcrun simctl openurl booted 'patlau://chats?conversation=<conversation-uuid>'` or by opening a deployed parent-support notification link on an installed device.

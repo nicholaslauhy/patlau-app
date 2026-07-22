@@ -445,55 +445,87 @@ struct SettingsView: View {
     }
 }
 
-private struct TelegramSupportAdministrator: Identifiable, Equatable {
+enum TelegramSupportAdminWebsiteRoute {
+    static let administrators = "/api/telegram-support-admins"
+    static let test = "/api/telegram-support-admins/test"
+    static let identityCommand = "/myid"
+}
+
+struct TelegramSupportAdministrator: Identifiable, Equatable {
     let id: String
     let displayName: String
-    let chatID: String
+    let chatIDHint: String
     let active: Bool
-    let protected: Bool
+    let deploymentFallback: Bool
+    let managedRecord: Bool
 
     init?(values: JSONObject) {
         let id = values.text("id")
         let displayName = values.text("display_name")
-        let chatID = values.text("telegram_chat_id")
-        guard !id.isEmpty, !displayName.isEmpty, !chatID.isEmpty else { return nil }
+        let chatIDHint = values.text("chat_id_hint")
+        guard !id.isEmpty, !displayName.isEmpty, !chatIDHint.isEmpty else { return nil }
 
         self.id = id
         self.displayName = displayName
-        self.chatID = chatID
+        self.chatIDHint = chatIDHint
         active = values.flag("active")
-        protected = false
+        deploymentFallback = values.flag("deployment_fallback")
+        managedRecord = true
     }
 
     private init(
         id: String,
         displayName: String,
-        chatID: String,
+        chatIDHint: String,
         active: Bool,
-        protected: Bool
+        deploymentFallback: Bool,
+        managedRecord: Bool
     ) {
         self.id = id
         self.displayName = displayName
-        self.chatID = chatID
+        self.chatIDHint = chatIDHint
         self.active = active
-        self.protected = protected
+        self.deploymentFallback = deploymentFallback
+        self.managedRecord = managedRecord
     }
 
-    static var environmentPrimary: TelegramSupportAdministrator {
+    static func environmentPrimary(chatIDHint: String) -> TelegramSupportAdministrator {
         TelegramSupportAdministrator(
             id: "vercel-primary-administrator",
             displayName: "Primary Administrator",
-            chatID: "",
+            chatIDHint: chatIDHint,
             active: true,
-            protected: true
+            deploymentFallback: true,
+            managedRecord: false
         )
     }
 
     var maskedChatID: String {
-        protected
+        chatIDHint.isEmpty
             ? "Configured securely in Vercel"
-            : "Telegram ID ending \(chatID.suffix(4))"
+            : "Telegram ID \(chatIDHint)"
     }
+}
+
+struct TelegramSupportFallback: Equatable {
+    var configured = false
+    var represented = false
+    var chatIDHint = ""
+
+    init() {}
+
+    init(values: JSONObject) {
+        configured = values.flag("configured")
+        represented = values.flag("represented")
+        chatIDHint = values.text("chat_id_hint")
+    }
+}
+
+func isValidTelegramSupportChatID(_ value: String) -> Bool {
+    value.range(
+        of: #"^[0-9]{5,20}$"#,
+        options: .regularExpression
+    ) != nil
 }
 
 private struct TelegramSupportAdministratorsView: View {
@@ -501,17 +533,17 @@ private struct TelegramSupportAdministratorsView: View {
 
     @State private var administrators: [TelegramSupportAdministrator] = []
     @State private var loading = false
-    @State private var environmentAdministratorConfigured = false
+    @State private var loadFailed = false
+    @State private var fallback = TelegramSupportFallback()
+    @State private var effectiveActiveCount = 0
     @State private var pendingRemoval: TelegramSupportAdministrator?
     @State private var showRemovalConfirmation = false
 
     private var allAdministrators: [TelegramSupportAdministrator] {
-        (environmentAdministratorConfigured ? [.environmentPrimary] : [])
+        (fallback.configured && !fallback.represented
+            ? [.environmentPrimary(chatIDHint: fallback.chatIDHint)]
+            : [])
             + administrators
-    }
-
-    private var activeCount: Int {
-        allAdministrators.filter(\.active).count
     }
 
     var body: some View {
@@ -522,9 +554,9 @@ private struct TelegramSupportAdministratorsView: View {
                         .font(.headline)
                         .foregroundStyle(Theme.ink)
 
-                    instruction(number: 1, text: "Ask the person to privately message /myid to the parent-support bot.")
+                    instruction(number: 1, text: "Ask the person to privately message \(TelegramSupportAdminWebsiteRoute.identityCommand) to the parent-support bot.")
                     instruction(number: 2, text: "Enter the name and numeric chat ID returned by the bot.")
-                    instruction(number: 3, text: "The app sends a verification message before enabling notifications.")
+                    instruction(number: 3, text: "After saving, ask them to send /start, then use Send Test to confirm delivery.")
                 }
                 .padding(.vertical, 5)
             }
@@ -532,11 +564,12 @@ private struct TelegramSupportAdministratorsView: View {
             Section {
                 NavigationLink {
                     AddTelegramSupportAdministratorView {
-                        await loadAdministrators()
+                        await loadAdministrators(reportFailure: false)
                     }
                 } label: {
                     Label("Add Telegram Administrator", systemImage: "person.badge.plus")
                 }
+                .disabled(loading || loadFailed)
             }
 
             Section {
@@ -546,6 +579,17 @@ private struct TelegramSupportAdministratorsView: View {
                         Text("Loading Telegram administrators…")
                             .foregroundStyle(Theme.secondaryText)
                     }
+                } else if loadFailed && allAdministrators.isEmpty {
+                    ContentUnavailableView {
+                        Label("Could Not Load Administrators", systemImage: "wifi.exclamationmark")
+                    } description: {
+                        Text("Refresh the list before making administrator changes.")
+                    } actions: {
+                        Button("Try Again") {
+                            Task { await loadAdministrators() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 } else if allAdministrators.isEmpty {
                     ContentUnavailableView(
                         "No Administrators Configured",
@@ -553,6 +597,14 @@ private struct TelegramSupportAdministratorsView: View {
                         description: Text("Use Add Telegram Administrator to connect another recipient.")
                     )
                 } else {
+                    if loadFailed {
+                        Label(
+                            "This list may be out of date. Refresh it before making another change.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.amber)
+                    }
                     ForEach(allAdministrators) { administrator in
                         administratorRow(administrator)
                     }
@@ -562,7 +614,7 @@ private struct TelegramSupportAdministratorsView: View {
                     Text("All Administrators")
                     Spacer()
                     if !allAdministrators.isEmpty {
-                        Text("\(activeCount) active")
+                        Text("\(effectiveActiveCount) active")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.secondaryText)
                     }
@@ -571,7 +623,11 @@ private struct TelegramSupportAdministratorsView: View {
                     }
                 }
             } footer: {
-                Text("The Primary Administrator is configured in Vercel and cannot be disabled or removed here. Website roles are managed separately.")
+                if fallback.configured {
+                    Text("The Primary Administrator is configured in Vercel and cannot be paused or removed here. Website roles are managed separately.")
+                } else {
+                    Text("Telegram IDs are masked. Website and app access roles are managed separately.")
+                }
             }
         }
         .listStyle(.insetGrouped)
@@ -599,12 +655,12 @@ private struct TelegramSupportAdministratorsView: View {
     @ViewBuilder
     private func administratorRow(_ administrator: TelegramSupportAdministrator) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: administrator.protected ? "checkmark.shield.fill" : "paperplane.fill")
+            Image(systemName: administrator.deploymentFallback ? "checkmark.shield.fill" : "paperplane.fill")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(
-                    administrator.protected ? Theme.green : Theme.blue,
+                    administrator.deploymentFallback ? Theme.green : Theme.blue,
                     in: RoundedRectangle(cornerRadius: 11)
                 )
 
@@ -620,28 +676,38 @@ private struct TelegramSupportAdministratorsView: View {
             Spacer(minLength: 8)
 
             StatusBadge(
-                text: administrator.protected
+                text: administrator.deploymentFallback
                     ? "Primary"
-                    : (administrator.active ? "Active" : "Disabled"),
+                    : (administrator.active ? "Active" : "Paused"),
                 color: administrator.active ? Theme.green : Theme.secondaryText
             )
 
-            if !administrator.protected {
+            if administrator.managedRecord {
                 Menu {
-                    Button {
-                        Task { await setActive(!administrator.active, for: administrator) }
-                    } label: {
-                        Label(
-                            administrator.active ? "Disable Notifications" : "Enable Notifications",
-                            systemImage: administrator.active ? "bell.slash" : "bell"
-                        )
+                    if administrator.active {
+                        Button {
+                            Task { await sendTest(to: administrator) }
+                        } label: {
+                            Label("Send Test", systemImage: "paperplane")
+                        }
                     }
 
-                    Button(role: .destructive) {
-                        pendingRemoval = administrator
-                        showRemovalConfirmation = true
-                    } label: {
-                        Label("Remove Administrator", systemImage: "trash")
+                    if !administrator.deploymentFallback {
+                        Button {
+                            Task { await setActive(!administrator.active, for: administrator) }
+                        } label: {
+                            Label(
+                                administrator.active ? "Pause Notifications" : "Enable Notifications",
+                                systemImage: administrator.active ? "bell.slash" : "bell"
+                            )
+                        }
+
+                        Button(role: .destructive) {
+                            pendingRemoval = administrator
+                            showRemovalConfirmation = true
+                        } label: {
+                            Label("Remove Administrator", systemImage: "trash")
+                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -649,6 +715,7 @@ private struct TelegramSupportAdministratorsView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(loading || loadFailed)
                 .accessibilityLabel("Actions for \(administrator.displayName)")
             }
         }
@@ -669,29 +736,37 @@ private struct TelegramSupportAdministratorsView: View {
         }
     }
 
-    private func loadAdministrators() async {
-        guard state.role == .superuser, !loading else { return }
+    @discardableResult
+    private func loadAdministrators(reportFailure: Bool = true) async -> Bool {
+        guard state.role == .superuser, !loading else { return false }
         loading = true
         defer { loading = false }
 
 #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-uiTestingTelegramAdministrators") {
-            environmentAdministratorConfigured = true
+            fallback = TelegramSupportFallback(values: [
+                "configured": .bool(true),
+                "represented": .bool(false),
+                "chat_id_hint": .string("••••••3766")
+            ])
+            effectiveActiveCount = 2
             administrators = [
                 TelegramSupportAdministrator(values: [
                     "id": .string("ui-test-added-administrator"),
                     "display_name": .string("Weekend Support Admin"),
-                    "telegram_chat_id": .string("123456789"),
-                    "active": .bool(true)
+                    "chat_id_hint": .string("•••••6789"),
+                    "active": .bool(true),
+                    "deployment_fallback": .bool(false)
                 ])
             ].compactMap { $0 }
-            return
+            loadFailed = false
+            return true
         }
 #endif
 
         do {
             let response = try await BackendClient.shared.websiteJSON(
-                path: "/api/support/telegram-admins"
+                path: TelegramSupportAdminWebsiteRoute.administrators
             )
             let object = response.object ?? [:]
             administrators = object["admins"]?.array?
@@ -701,9 +776,14 @@ private struct TelegramSupportAdministratorsView: View {
                     if $0.active != $1.active { return $0.active && !$1.active }
                     return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
                 } ?? []
-            environmentAdministratorConfigured = object.flag("environmentAdminConfigured")
+            fallback = TelegramSupportFallback(values: object["fallback"]?.object ?? [:])
+            effectiveActiveCount = Int(object["effective_active_count"]?.double ?? 0)
+            loadFailed = false
+            return true
         } catch {
-            state.show(error)
+            loadFailed = true
+            if reportFailure { state.show(error) }
+            return false
         }
     }
 
@@ -711,44 +791,82 @@ private struct TelegramSupportAdministratorsView: View {
         _ active: Bool,
         for administrator: TelegramSupportAdministrator
     ) async {
+        guard state.role == .superuser else {
+            state.show("Superuser access is required.", kind: .error)
+            return
+        }
         let activity = state.beginActivity(
-            active ? "Enabling Telegram administrator…" : "Disabling Telegram administrator…"
+            active ? "Enabling Telegram administrator…" : "Pausing Telegram administrator…"
         )
         defer { state.endActivity(activity) }
 
         do {
             _ = try await BackendClient.shared.websiteJSON(
-                path: "/api/support/telegram-admins",
-                method: "POST",
+                path: TelegramSupportAdminWebsiteRoute.administrators,
+                method: "PATCH",
                 body: [
-                    "action": .string("set_active"),
                     "id": .string(administrator.id),
                     "active": .bool(active)
                 ]
             )
-            state.show("\(administrator.displayName) was \(active ? "enabled" : "disabled").")
-            await loadAdministrators()
+            let refreshed = await loadAdministrators(reportFailure: false)
+            if refreshed {
+                state.show("\(administrator.displayName) was \(active ? "enabled" : "paused").")
+            } else {
+                state.show(
+                    "The change was saved, but the administrator list could not refresh. Try again before making another change.",
+                    kind: .error
+                )
+            }
+        } catch {
+            state.show(error)
+        }
+    }
+
+    private func sendTest(to administrator: TelegramSupportAdministrator) async {
+        guard state.role == .superuser else {
+            state.show("Superuser access is required.", kind: .error)
+            return
+        }
+        let activity = state.beginActivity("Sending Telegram test…")
+        defer { state.endActivity(activity) }
+
+        do {
+            _ = try await BackendClient.shared.websiteJSON(
+                path: TelegramSupportAdminWebsiteRoute.test,
+                method: "POST",
+                body: ["id": .string(administrator.id)]
+            )
+            state.show("Test notification sent to \(administrator.displayName).")
         } catch {
             state.show(error)
         }
     }
 
     private func remove(_ administrator: TelegramSupportAdministrator) async {
+        guard state.role == .superuser else {
+            state.show("Superuser access is required.", kind: .error)
+            return
+        }
         let activity = state.beginActivity("Removing Telegram administrator…")
         defer { state.endActivity(activity) }
 
         do {
             _ = try await BackendClient.shared.websiteJSON(
-                path: "/api/support/telegram-admins",
-                method: "POST",
-                body: [
-                    "action": .string("remove"),
-                    "id": .string(administrator.id)
-                ]
+                path: TelegramSupportAdminWebsiteRoute.administrators,
+                method: "DELETE",
+                body: ["id": .string(administrator.id)]
             )
             pendingRemoval = nil
-            state.show("\(administrator.displayName) was removed.")
-            await loadAdministrators()
+            let refreshed = await loadAdministrators(reportFailure: false)
+            if refreshed {
+                state.show("\(administrator.displayName) was removed.")
+            } else {
+                state.show(
+                    "The account was removed, but the administrator list could not refresh. Try again before making another change.",
+                    kind: .error
+                )
+            }
         } catch {
             state.show(error)
         }
@@ -759,7 +877,7 @@ private struct AddTelegramSupportAdministratorView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    let onAdded: () async -> Void
+    let onAdded: () async -> Bool
 
     @State private var displayName = ""
     @State private var chatID = ""
@@ -774,10 +892,7 @@ private struct AddTelegramSupportAdministratorView: View {
     }
 
     private var validChatID: Bool {
-        normalizedChatID.range(
-            of: #"^-?[0-9]{5,20}$"#,
-            options: .regularExpression
-        ) != nil
+        isValidTelegramSupportChatID(normalizedChatID)
     }
 
     private var canSubmit: Bool {
@@ -788,7 +903,7 @@ private struct AddTelegramSupportAdministratorView: View {
         Form {
             Section {
                 Label {
-                    Text("The person must privately send /myid to the parent-support bot before you add them.")
+                    Text("The person must privately send \(TelegramSupportAdminWebsiteRoute.identityCommand) to the parent-support bot before you add them.")
                         .font(.subheadline)
                         .foregroundStyle(Theme.secondaryText)
                 } icon: {
@@ -803,7 +918,7 @@ private struct AddTelegramSupportAdministratorView: View {
                     .textInputAutocapitalization(.words)
 
                 TextField("Telegram chat ID", text: $chatID)
-                    .keyboardType(.numbersAndPunctuation)
+                    .keyboardType(.numberPad)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
@@ -819,14 +934,14 @@ private struct AddTelegramSupportAdministratorView: View {
             Section {
                 AsyncActionButton(
                     title: "Add Telegram Administrator",
-                    progressTitle: "Verifying with Telegram…",
-                    icon: "paperplane.fill",
+                    progressTitle: "Adding administrator…",
+                    icon: "person.badge.plus",
                     disabled: !canSubmit
                 ) {
                     await addAdministrator()
                 }
             } footer: {
-                Text("Telegram sends a confirmation message before the account is enabled.")
+                Text("After adding the account, ask the person to send /start and use Send Test from the administrator list.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -844,16 +959,22 @@ private struct AddTelegramSupportAdministratorView: View {
         errorMessage = ""
         do {
             _ = try await BackendClient.shared.websiteJSON(
-                path: "/api/support/telegram-admins",
+                path: TelegramSupportAdminWebsiteRoute.administrators,
                 method: "POST",
                 body: [
-                    "action": .string("add"),
-                    "displayName": .string(normalizedName),
-                    "chatId": .string(normalizedChatID)
+                    "display_name": .string(normalizedName),
+                    "telegram_chat_id": .string(normalizedChatID)
                 ]
             )
-            await onAdded()
-            state.show("\(normalizedName) is now receiving Telegram support notifications.")
+            let refreshed = await onAdded()
+            if refreshed {
+                state.show("\(normalizedName) was added. Ask them to send /start, then use Send Test.")
+            } else {
+                state.show(
+                    "\(normalizedName) was added, but the administrator list could not refresh. Try again before making another change.",
+                    kind: .error
+                )
+            }
             dismiss()
         } catch {
             guard !error.isExpectedCancellation else { return }

@@ -534,10 +534,10 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertTrue(superuserApp.staticTexts["All Administrators"].exists)
         XCTAssertTrue(superuserApp.staticTexts["2 active"].exists)
         XCTAssertTrue(superuserApp.staticTexts["Primary Administrator"].exists)
-        XCTAssertTrue(superuserApp.staticTexts["Configured securely in Vercel"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["Telegram ID ••••••3766"].exists)
         XCTAssertTrue(superuserApp.staticTexts["PRIMARY"].exists)
         XCTAssertTrue(superuserApp.staticTexts["Weekend Support Admin"].exists)
-        XCTAssertTrue(superuserApp.staticTexts["Telegram ID ending 6789"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["Telegram ID •••••6789"].exists)
         XCTAssertTrue(superuserApp.staticTexts["ACTIVE"].exists)
         XCTAssertFalse(superuserApp.buttons["Actions for Primary Administrator"].exists)
         XCTAssertTrue(superuserApp.buttons["Actions for Weekend Support Admin"].exists)
@@ -549,6 +549,34 @@ final class NavigationSmokeTests: XCTestCase {
         memberApp.tabBars.buttons["Account"].tap()
         XCTAssertTrue(memberApp.navigationBars["Account"].waitForExistence(timeout: 5))
         XCTAssertFalse(memberApp.staticTexts["Telegram Administrators"].exists)
+    }
+
+    func testConversationUniversalLinkIsRoleProtected() throws {
+        let conversationID = "7cda7535-f22d-405e-a996-12f9c30db44d"
+        let superuserApp = launchApp(arguments: [
+            "-uiTestingRole=superuser",
+            "-uiTestingConversation=\(conversationID)"
+        ])
+
+        XCTAssertTrue(
+            superuserApp.navigationBars["Parent Conversation"]
+                .waitForExistence(timeout: 6)
+        )
+        XCTAssertTrue(superuserApp.tabBars.buttons["Operations"].isSelected)
+        superuserApp.terminate()
+
+        let memberApp = launchApp(arguments: [
+            "-uiTestingRole=member",
+            "-uiTestingConversation=\(conversationID)"
+        ])
+
+        XCTAssertTrue(memberApp.navigationBars["Home"].waitForExistence(timeout: 5))
+        XCTAssertFalse(memberApp.navigationBars["Parent Conversation"].exists)
+        XCTAssertTrue(
+            memberApp.staticTexts[
+                "Superuser access is required to open parent conversations."
+            ].waitForExistence(timeout: 4)
+        )
     }
 
     func testAddStudentIsAStandalonePage() throws {

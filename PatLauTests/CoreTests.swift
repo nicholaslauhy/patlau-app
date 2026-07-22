@@ -7,6 +7,7 @@ final class CoreTests: XCTestCase {
         let state = AppState()
         XCTAssertNil(state.session)
         XCTAssertEqual(state.role, .member)
+        XCTAssertFalse(state.hasResolvedAccount)
     }
 
     func testJSONValueRoundTrip() throws {
@@ -787,6 +788,130 @@ final class CoreTests: XCTestCase {
             SupportRefreshSection.announcements.responseKey,
             "announcements"
         )
+    }
+
+    func testSupportConversationUniversalLinkUsesProductionHostAndUUID() {
+        let id = "7cda7535-f22d-405e-a996-12f9c30db44d"
+        let link = SupportConversationDeepLink.parse(
+            URL(string: "https://patlaubmt.vercel.app/open-in-app/chats?conversation=\(id)")!
+        )
+
+        XCTAssertEqual(link?.conversationID, id)
+    }
+
+    func testSupportConversationCustomSchemeUsesPatLauChatRouteAndUUID() {
+        let id = "7cda7535-f22d-405e-a996-12f9c30db44d"
+        let link = SupportConversationDeepLink.parse(
+            URL(string: "patlau://chats?conversation=\(id)")!
+        )
+
+        XCTAssertEqual(link?.conversationID, id)
+    }
+
+    func testSupportConversationUniversalLinkRejectsUntrustedOrMalformedURLs() {
+        let id = "7cda7535-f22d-405e-a996-12f9c30db44d"
+
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "http://patlaubmt.vercel.app/open-in-app/chats?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "https://example.com/open-in-app/chats?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "https://patlaubmt.vercel.app:444/open-in-app/chats?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "https://user@patlaubmt.vercel.app/open-in-app/chats?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "https://patlaubmt.vercel.app/chats?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "https://patlaubmt.vercel.app/open-in-app/chats?conversation=../../settings")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "https://patlaubmt.vercel.app/open-in-app/chats?conversation=\(id)&other=value")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "anotherapp://chats?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "patlau://settings?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "patlau://chats/other?conversation=\(id)")!
+        ))
+        XCTAssertNil(SupportConversationDeepLink.parse(
+            URL(string: "patlau://chats?conversation=\(id)&other=value")!
+        ))
+    }
+
+    @MainActor
+    func testConversationUniversalLinkRemainsPendingUntilConsumedAfterLogin() {
+        let id = "7cda7535-f22d-405e-a996-12f9c30db44d"
+        let state = AppState()
+        let url = URL(
+            string: "patlau://chats?conversation=\(id)"
+        )!
+
+        XCTAssertTrue(state.handleIncomingURL(url))
+        XCTAssertEqual(state.pendingConversationID, id)
+        XCTAssertEqual(state.takePendingConversationID(), id)
+        XCTAssertNil(state.pendingConversationID)
+        XCTAssertNil(state.takePendingConversationID())
+
+        XCTAssertTrue(state.handleIncomingURL(url))
+        XCTAssertNil(
+            state.pendingConversationID,
+            "Duplicate lifecycle delivery must not reopen the same link."
+        )
+    }
+
+    func testTelegramAdministratorUsesTheMaskedWebsiteResponseContract() {
+        XCTAssertEqual(
+            TelegramSupportAdminWebsiteRoute.administrators,
+            "/api/telegram-support-admins"
+        )
+        XCTAssertEqual(
+            TelegramSupportAdminWebsiteRoute.test,
+            "/api/telegram-support-admins/test"
+        )
+        XCTAssertEqual(TelegramSupportAdminWebsiteRoute.identityCommand, "/myid")
+
+        let administrator = TelegramSupportAdministrator(values: [
+            "id": .string("11111111-1111-4111-8111-111111111111"),
+            "display_name": .string("Coach Patrick"),
+            "active": .bool(true),
+            "chat_id_hint": .string("•••••6789"),
+            "deployment_fallback": .bool(false)
+        ])
+
+        XCTAssertEqual(administrator?.displayName, "Coach Patrick")
+        XCTAssertEqual(administrator?.chatIDHint, "•••••6789")
+        XCTAssertTrue(administrator?.active == true)
+        XCTAssertTrue(administrator?.managedRecord == true)
+        XCTAssertTrue(administrator?.deploymentFallback == false)
+
+        let fallback = TelegramSupportFallback(values: [
+            "configured": .bool(true),
+            "represented": .bool(false),
+            "chat_id_hint": .string("••••••3766")
+        ])
+        XCTAssertTrue(fallback.configured)
+        XCTAssertFalse(fallback.represented)
+        XCTAssertEqual(fallback.chatIDHint, "••••••3766")
+    }
+
+    func testTelegramAdministratorRejectsRawOrMissingPrivateIdentifiers() {
+        XCTAssertNil(TelegramSupportAdministrator(values: [
+            "id": .string("11111111-1111-4111-8111-111111111111"),
+            "display_name": .string("Legacy record"),
+            "active": .bool(true),
+            "telegram_chat_id": .string("123456789")
+        ]))
+        XCTAssertTrue(isValidTelegramSupportChatID("123456789"))
+        XCTAssertFalse(isValidTelegramSupportChatID("-123456789"))
+        XCTAssertFalse(isValidTelegramSupportChatID("group-id"))
     }
 
     func testDelayedSignOutCannotClearNewSession() async {

@@ -29,7 +29,6 @@
 		ADA2E54DF379F2E1836251C2 /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD22AD01ACF092BB07AE8F56 /* BackendClient.swift */; };
 		B80757C5EF97E590617ABC4D /* PortalOperation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25DA57D9CF108FE76AA9932 /* PortalOperation.swift */; };
 		BF8FA3560253EA1B37DE43F7 /* AttendanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFCD5EEF825EB12A235B56DC /* AttendanceView.swift */; };
-		F0A1B2C3D4E5F60718293A4C /* SessionAttendanceReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A1B2C3D4E5F60718293A4B /* SessionAttendanceReportView.swift */; };
 		C1305435EBD0D1075E5667C2 /* QuickAccessPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8254D3D6B1E4E08AD2B3667 /* QuickAccessPreferences.swift */; };
 		C6122A11C0C5C18194185C2C /* ChatsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E8A3D2C596C1B426D28442 /* ChatsView.swift */; };
 		C634F012E9D527412EEC8DE1 /* ReportsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D6FF5E9D4B6C210D1C8B157 /* ReportsView.swift */; };
@@ -37,6 +36,7 @@
 		DD52B4C8DDBCB54D302C698F /* DateHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5828091863CF362CC4F08D1B /* DateHelpers.swift */; };
 		DDC55DC8E5F410D7EF01B550 /* CoachAttendanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6C9A81D9EA21A97AFA881DE /* CoachAttendanceView.swift */; };
 		EC51949491477876B81F9A93 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11297B7D47F90186A7BBB4F3 /* Components.swift */; };
+		F0A1B2C3D4E5F60718293A4C /* SessionAttendanceReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A1B2C3D4E5F60718293A4B /* SessionAttendanceReportView.swift */; };
 		F1E442D19337A5E34687D448 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D0189BFA23373A2BFE80DF /* DashboardView.swift */; };
 		F62BC4B15622A95740B6269E /* ProgrammeDirectoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2684CB8C84E9657B3C7F721 /* ProgrammeDirectoryView.swift */; };
 /* End PBXBuildFile section */
@@ -82,7 +82,6 @@
 		9E2631D6995896699C636F04 /* AppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		9E37578A9082E54DA3F13BDA /* MakeupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MakeupView.swift; sourceTree = "<group>"; };
 		AFCD5EEF825EB12A235B56DC /* AttendanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttendanceView.swift; sourceTree = "<group>"; };
-		F0A1B2C3D4E5F60718293A4B /* SessionAttendanceReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAttendanceReportView.swift; sourceTree = "<group>"; };
 		B25DA57D9CF108FE76AA9932 /* PortalOperation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortalOperation.swift; sourceTree = "<group>"; };
 		B94E5F92E1ECBC64DA48D858 /* TrainingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrainingView.swift; sourceTree = "<group>"; };
 		C26989E64BC720EE0DF9C10E /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
@@ -93,6 +92,7 @@
 		DD40390C35866A095BB41EC3 /* PatLauTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PatLauTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E2684CB8C84E9657B3C7F721 /* ProgrammeDirectoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgrammeDirectoryView.swift; sourceTree = "<group>"; };
 		E6C9A81D9EA21A97AFA881DE /* CoachAttendanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachAttendanceView.swift; sourceTree = "<group>"; };
+		F0A1B2C3D4E5F60718293A4B /* SessionAttendanceReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAttendanceReportView.swift; sourceTree = "<group>"; };
 		F72C95F0EDE45E1DD966A864 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -537,7 +537,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = QLA6QNFQT9;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -605,7 +605,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = QLA6QNFQT9;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;

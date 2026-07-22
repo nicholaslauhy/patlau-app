@@ -703,6 +703,97 @@ private struct SupportEditorSheet: View {
     }
 }
 
+struct SupportConversationDeepLinkView: View {
+    @EnvironmentObject private var state: AppState
+
+    let conversationID: String
+
+    @State private var conversation: DynamicRecord?
+    @State private var loading = true
+    @State private var errorMessage = ""
+    @State private var loadRequestID = UUID()
+
+    var body: some View {
+        Group {
+            if let conversation {
+                ConversationView(conversation: conversation)
+                    .id(conversation.id)
+            } else if loading {
+                VStack(spacing: 14) {
+                    ProgressView()
+                        .controlSize(.large)
+                    Text("Loading the parent conversation…")
+                        .font(.headline)
+                        .foregroundStyle(Theme.ink)
+                    Text("The latest messages are being retrieved securely.")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(24)
+                .background(Theme.background)
+            } else {
+                ContentUnavailableView {
+                    Label("Conversation Unavailable", systemImage: "exclamationmark.bubble.fill")
+                } description: {
+                    Text(errorMessage.isEmpty
+                        ? "This parent conversation could not be opened."
+                        : errorMessage)
+                } actions: {
+                    Button("Try Again") {
+                        Task { await loadConversation() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .navigationTitle("Parent Conversation")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: conversationID) {
+            await loadConversation()
+        }
+    }
+
+    private func loadConversation() async {
+        guard state.role == .superuser else {
+            loading = false
+            conversation = nil
+            errorMessage = "Superuser access is required."
+            return
+        }
+
+        let requestID = UUID()
+        loadRequestID = requestID
+        conversation = nil
+        errorMessage = ""
+        loading = true
+        defer {
+            if loadRequestID == requestID { loading = false }
+        }
+
+        do {
+            let response = try await BackendClient.shared.websiteJSON(
+                path: "\(SupportWebsiteRoute.summary)?conversation_id=\(conversationID)"
+            )
+            guard let object = response.object?["conversation"]?.object else {
+                throw BackendError.message("The support service returned an invalid conversation.")
+            }
+            let decoded = flattenSupportConversation(object)
+            guard decoded.id.caseInsensitiveCompare(conversationID) == .orderedSame else {
+                throw BackendError.message("The support service returned a different conversation.")
+            }
+            guard !Task.isCancelled, loadRequestID == requestID else { return }
+            conversation = decoded
+        } catch {
+            guard loadRequestID == requestID,
+                  !Task.isCancelled,
+                  !error.isExpectedCancellation else { return }
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
 private struct ConversationView: View {
     @EnvironmentObject private var state: AppState
 

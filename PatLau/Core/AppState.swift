@@ -1,17 +1,63 @@
 import Foundation
 import Combine
 
+struct SupportConversationDeepLink: Equatable, Sendable {
+    static let path = "/open-in-app/chats"
+    static let customScheme = "patlau"
+    static let customHost = "chats"
+
+    let conversationID: String
+
+    static func parse(
+        _ url: URL,
+        websiteURL: URL = AppConfiguration.websiteURL
+    ) -> SupportConversationDeepLink? {
+        let isTrustedWebsiteLink = url.scheme?.lowercased() == "https"
+            && url.host?.lowercased() == websiteURL.host?.lowercased()
+            && url.port == websiteURL.port
+            && url.path == path
+        let isPatLauAppLink = url.scheme?.lowercased() == customScheme
+            && url.host?.lowercased() == customHost
+            && url.port == nil
+            && (url.path.isEmpty || url.path == "/")
+
+        guard (isTrustedWebsiteLink || isPatLauAppLink),
+              url.user == nil,
+              url.password == nil,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.fragment == nil,
+              let queryItems = components.queryItems,
+              queryItems.count == 1,
+              queryItems[0].name == "conversation",
+              let value = queryItems[0].value?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              value.range(
+                of: #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"#,
+                options: .regularExpression
+              ) != nil else {
+            return nil
+        }
+
+        return SupportConversationDeepLink(conversationID: value.lowercased())
+    }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published private(set) var session: AuthSession?
     @Published private(set) var role: UserRole = .member
     @Published private(set) var isResolvingRole = false
+    @Published private(set) var hasResolvedAccount = false
     @Published var notice: AppNotice?
     @Published private(set) var activity: AppActivity?
     @Published private(set) var avatarRevision = UUID()
+    @Published private(set) var pendingConversationID: String?
 
     private var activities: [UUID: AppActivity] = [:]
     private var activityOrder: [UUID] = []
+    private var accountResolutionID: UUID?
+    private var lastAcceptedConversationID: String?
+    private var lastAcceptedConversationAt: Date?
 
     var user: AuthUser? { session?.user }
 
@@ -43,6 +89,20 @@ final class AppState: ObservableObject {
                 user: testUser
             )
             role = testRole
+            hasResolvedAccount = true
+            if let conversationArgument = ProcessInfo.processInfo.arguments.first(where: {
+                $0.hasPrefix("-uiTestingConversation=")
+            }) {
+                let conversationID = conversationArgument.replacingOccurrences(
+                    of: "-uiTestingConversation=",
+                    with: ""
+                )
+                if let url = URL(
+                    string: "\(SupportConversationDeepLink.customScheme)://\(SupportConversationDeepLink.customHost)?conversation=\(conversationID)"
+                ) {
+                    _ = handleIncomingURL(url)
+                }
+            }
             if ProcessInfo.processInfo.arguments.contains("-uiTestingNotice") {
                 notice = AppNotice(
                     text: "Profile photo updated.",
@@ -89,8 +149,24 @@ final class AppState: ObservableObject {
     func refreshAccount() async {
         guard let startingSession = session, !isResolvingRole else { return }
         let expectedUserID = startingSession.user.id
+        let resolutionID = UUID()
+        accountResolutionID = resolutionID
+        var trustedRoleResolved = Self.trustedRole(for: startingSession.user) != nil
         isResolvingRole = true
-        defer { isResolvingRole = false }
+        hasResolvedAccount = false
+        defer {
+            if accountResolutionID == resolutionID,
+               session?.user.id == expectedUserID {
+                isResolvingRole = false
+                hasResolvedAccount = trustedRoleResolved
+                if !trustedRoleResolved, pendingConversationID != nil {
+                    show(
+                        "Your account access could not be verified. The conversation link is still waiting; refresh your account or sign in again.",
+                        kind: .error
+                    )
+                }
+            }
+        }
 
         if let expiry = session?.expiryDate,
            expiry < Date().addingTimeInterval(5 * 60),
@@ -98,6 +174,7 @@ final class AppState: ObservableObject {
             guard session?.user.id == expectedUserID else { return }
             session = refreshed
             role = refreshed.user.role
+            trustedRoleResolved = Self.trustedRole(for: refreshed.user) != nil
         }
 
         if let latestUser = try? await BackendClient.shared.fetchCurrentUser() {
@@ -109,6 +186,7 @@ final class AppState: ObservableObject {
                 let updated = latestSession.replacingUser(latestUser)
                 session = updated
                 role = latestUser.role
+                trustedRoleResolved = Self.trustedRole(for: latestUser) != nil
                 await BackendClient.shared.setSession(updated)
             }
         }
@@ -126,6 +204,10 @@ final class AppState: ObservableObject {
                     finalSession.user.replacingRole(protectedRole)
                 )
                 role = protectedRole
+                trustedRoleResolved = true
+            } else if let trustedRole = Self.trustedRole(for: finalSession.user) {
+                role = trustedRole
+                trustedRoleResolved = true
             } else {
                 role = finalSession.user.role
             }
@@ -140,6 +222,8 @@ final class AppState: ObservableObject {
         session = nil
         role = .member
         isResolvingRole = false
+        hasResolvedAccount = false
+        accountResolutionID = nil
         notice = nil
         activities.removeAll()
         activityOrder.removeAll()
@@ -153,6 +237,26 @@ final class AppState: ObservableObject {
                 ifAccessTokenMatches: signedOutAccessToken
             )
         }
+    }
+
+    @discardableResult
+    func handleIncomingURL(_ url: URL) -> Bool {
+        guard let link = SupportConversationDeepLink.parse(url) else { return false }
+        let now = Date()
+        if lastAcceptedConversationID == link.conversationID,
+           let previous = lastAcceptedConversationAt,
+           now.timeIntervalSince(previous) < 2 {
+            return true
+        }
+        lastAcceptedConversationID = link.conversationID
+        lastAcceptedConversationAt = now
+        pendingConversationID = link.conversationID
+        return true
+    }
+
+    func takePendingConversationID() -> String? {
+        defer { pendingConversationID = nil }
+        return pendingConversationID
     }
 
     func show(_ text: String, kind: AppNotice.Kind = .success) {
@@ -187,13 +291,22 @@ final class AppState: ObservableObject {
     }
 
     private func accept(_ value: AuthSession, resolveAccount: Bool) async {
+        accountResolutionID = nil
         session = value
         role = value.user.role
+        hasResolvedAccount = false
         await BackendClient.shared.setSession(value)
 
         if resolveAccount {
             await refreshAccount()
+        } else {
+            hasResolvedAccount = true
         }
+    }
+
+    private static func trustedRole(for user: AuthUser) -> UserRole? {
+        guard let value = user.appMetadata?["role"]?.string else { return nil }
+        return UserRole(rawValue: value)
     }
 }
 

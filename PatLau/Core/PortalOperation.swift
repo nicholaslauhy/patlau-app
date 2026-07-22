@@ -45,6 +45,7 @@ enum OperationGroup: String, CaseIterable, Identifiable, Hashable {
 enum AppRoute: Hashable {
     case group(OperationGroup)
     case operation(PortalOperation)
+    case supportConversation(String)
 }
 
 /// A one-to-one map of the authenticated operational areas exposed by the
