@@ -71,6 +71,15 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Attended"].exists)
         XCTAssertTrue(app.staticTexts["Missed"].exists)
         XCTAssertTrue(app.buttons["Refresh Weekend session reports"].exists)
+
+        let dateButton = app.buttons["session-attendance-report-date-button"]
+        XCTAssertTrue(dateButton.exists)
+        dateButton.tap()
+        XCTAssertTrue(app.staticTexts["Choose a Date"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.datePickers["attendance-date-picker"].exists)
+        XCTAssertEqual(app.buttons["attendance-date-cancel"].label, "Cancel")
+        app.buttons["attendance-date-cancel"].tap()
+
         keepScreenshot(of: app, name: "Weekend Session Attendance Report")
     }
 

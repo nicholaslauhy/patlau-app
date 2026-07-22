@@ -660,7 +660,7 @@ struct ReportsView: View {
     }
 }
 
-private struct AttendanceDatePickerSheet: View {
+struct AttendanceDatePickerSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var draftDate: Date

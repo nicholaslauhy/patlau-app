@@ -353,6 +353,7 @@ struct SessionAttendanceReportView: View {
     @State private var search = ""
     @State private var entries: [SessionAttendanceReportEntry] = []
     @State private var loading = false
+    @State private var isDatePickerPresented = false
 
     private var filteredEntries: [SessionAttendanceReportEntry] {
         entries.filter { entry in
@@ -401,12 +402,26 @@ struct SessionAttendanceReportView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Previous day")
 
-                        DatePicker(
-                            "Report date",
-                            selection: $selectedDate,
-                            displayedComponents: .date
-                        )
-                        .datePickerStyle(.compact)
+                        Button {
+                            isDatePickerPresented = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("Report date")
+                                    .foregroundStyle(Theme.ink)
+                                Spacer(minLength: 8)
+                                Text(selectedDateLabel)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.ink)
+                                Image(systemName: "calendar")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.blue)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Choose report date")
+                        .accessibilityValue(selectedDateLabel)
+                        .accessibilityIdentifier("session-attendance-report-date-button")
 
                         Button {
                             changeDate(by: 1)
@@ -475,6 +490,13 @@ struct SessionAttendanceReportView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
         .task(id: loadKey) { await load() }
+        .sheet(isPresented: $isDatePickerPresented) {
+            AttendanceDatePickerSheet(selectedDate: selectedDate) { date in
+                selectedDate = Calendar.current.startOfDay(for: date)
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
         .overlay {
             if loading { LoadingOverlay(text: "Loading session reports") }
         }
@@ -626,6 +648,10 @@ struct SessionAttendanceReportView: View {
             value: days,
             to: selectedDate
         ) ?? selectedDate
+    }
+
+    private var selectedDateLabel: String {
+        selectedDate.formatted(.dateTime.day().month(.abbreviated).year())
     }
 
     private func reportDateTitle(_ dateKey: String) -> String {
