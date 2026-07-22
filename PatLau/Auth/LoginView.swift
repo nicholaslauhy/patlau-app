@@ -25,15 +25,41 @@ struct LoginView: View {
                                 .font(.subheadline).foregroundStyle(Theme.amber).padding(12).background(Theme.amber.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                         }
                         if !errorMessage.isEmpty { Label(errorMessage, systemImage: "exclamationmark.triangle.fill").font(.subheadline).foregroundStyle(Theme.red).frame(maxWidth: .infinity, alignment: .leading) }
-                        TextField("Email or username", text: $identifier)
-                            .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .padding(15).background(Theme.background, in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(Theme.border))
-                        HStack {
-                            Group { if showPassword { TextField("Password", text: $password) } else { SecureField("Password", text: $password) } }
-                                .textContentType(.password)
-                            Button { showPassword.toggle() } label: { Image(systemName: showPassword ? "eye.slash" : "eye").frame(width: 42, height: 42) }.buttonStyle(.plain)
+                        LoginCredentialField(
+                            accessibilityIdentifier: "login-email-container"
+                        ) {
+                            TextField("Email or username", text: $identifier)
+                                .textContentType(.username)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .textFieldStyle(.plain)
+                                .frame(maxWidth: .infinity)
                         }
-                        .padding(.leading, 15).padding(.trailing, 5).background(Theme.background, in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(Theme.border))
+
+                        LoginCredentialField(
+                            accessibilityIdentifier: "login-password-container",
+                            trailingPadding: 5
+                        ) {
+                            Group {
+                                if showPassword {
+                                    TextField("Password", text: $password)
+                                } else {
+                                    SecureField("Password", text: $password)
+                                }
+                            }
+                                .textContentType(.password)
+                                .textFieldStyle(.plain)
+                                .frame(maxWidth: .infinity)
+
+                            Button {
+                                showPassword.toggle()
+                            } label: {
+                                Image(systemName: showPassword ? "eye.slash" : "eye")
+                                    .frame(width: 42, height: 42)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(showPassword ? "Hide password" : "Show password")
+                        }
                         AsyncActionButton(title: "Sign in", icon: "arrow.right.circle.fill", disabled: identifier.isEmpty || password.isEmpty || !AppConfiguration.isConfigured) {
                             errorMessage = ""
                             do {
@@ -63,6 +89,42 @@ struct LoginView: View {
             }
             #endif
         }
+    }
+}
+
+private struct LoginCredentialField<Content: View>: View {
+    let accessibilityIdentifier: String
+    let trailingPadding: CGFloat
+    let content: Content
+
+    init(
+        accessibilityIdentifier: String,
+        trailingPadding: CGFloat = 15,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.trailingPadding = trailingPadding
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            content
+        }
+        .padding(.leading, 15)
+        .padding(.trailing, trailingPadding)
+        .frame(maxWidth: .infinity)
+        .frame(height: 52)
+        .background(
+            Theme.background,
+            in: RoundedRectangle(cornerRadius: 13)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 13)
+                .stroke(Theme.border)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 }
 

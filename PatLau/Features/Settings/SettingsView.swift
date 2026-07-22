@@ -450,6 +450,7 @@ private struct TelegramSupportAdministrator: Identifiable, Equatable {
     let displayName: String
     let chatID: String
     let active: Bool
+    let protected: Bool
 
     init?(values: JSONObject) {
         let id = values.text("id")
@@ -461,10 +462,37 @@ private struct TelegramSupportAdministrator: Identifiable, Equatable {
         self.displayName = displayName
         self.chatID = chatID
         active = values.flag("active")
+        protected = false
+    }
+
+    private init(
+        id: String,
+        displayName: String,
+        chatID: String,
+        active: Bool,
+        protected: Bool
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.chatID = chatID
+        self.active = active
+        self.protected = protected
+    }
+
+    static var environmentPrimary: TelegramSupportAdministrator {
+        TelegramSupportAdministrator(
+            id: "vercel-primary-administrator",
+            displayName: "Primary Administrator",
+            chatID: "",
+            active: true,
+            protected: true
+        )
     }
 
     var maskedChatID: String {
-        "Telegram ID ending \(chatID.suffix(4))"
+        protected
+            ? "Configured securely in Vercel"
+            : "Telegram ID ending \(chatID.suffix(4))"
     }
 }
 
@@ -477,8 +505,13 @@ private struct TelegramSupportAdministratorsView: View {
     @State private var pendingRemoval: TelegramSupportAdministrator?
     @State private var showRemovalConfirmation = false
 
+    private var allAdministrators: [TelegramSupportAdministrator] {
+        (environmentAdministratorConfigured ? [.environmentPrimary] : [])
+            + administrators
+    }
+
     private var activeCount: Int {
-        administrators.filter(\.active).count
+        allAdministrators.filter(\.active).count
     }
 
     var body: some View {
@@ -496,23 +529,6 @@ private struct TelegramSupportAdministratorsView: View {
                 .padding(.vertical, 5)
             }
 
-            if environmentAdministratorConfigured {
-                Section {
-                    Label {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Primary administrator protected")
-                                .font(.body.weight(.semibold))
-                            Text("The administrator configured in Vercel remains active and cannot be removed here.")
-                                .font(.caption)
-                                .foregroundStyle(Theme.secondaryText)
-                        }
-                    } icon: {
-                        Image(systemName: "checkmark.shield.fill")
-                            .foregroundStyle(Theme.green)
-                    }
-                }
-            }
-
             Section {
                 NavigationLink {
                     AddTelegramSupportAdministratorView {
@@ -524,28 +540,28 @@ private struct TelegramSupportAdministratorsView: View {
             }
 
             Section {
-                if loading && administrators.isEmpty {
+                if loading && allAdministrators.isEmpty {
                     HStack(spacing: 10) {
                         ProgressView()
                         Text("Loading Telegram administrators…")
                             .foregroundStyle(Theme.secondaryText)
                     }
-                } else if administrators.isEmpty {
+                } else if allAdministrators.isEmpty {
                     ContentUnavailableView(
-                        "No Additional Administrators",
+                        "No Administrators Configured",
                         systemImage: "person.2.slash",
                         description: Text("Use Add Telegram Administrator to connect another recipient.")
                     )
                 } else {
-                    ForEach(administrators) { administrator in
+                    ForEach(allAdministrators) { administrator in
                         administratorRow(administrator)
                     }
                 }
             } header: {
                 HStack {
-                    Text("Added Administrators")
+                    Text("All Administrators")
                     Spacer()
-                    if !administrators.isEmpty {
+                    if !allAdministrators.isEmpty {
                         Text("\(activeCount) active")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.secondaryText)
@@ -555,7 +571,7 @@ private struct TelegramSupportAdministratorsView: View {
                     }
                 }
             } footer: {
-                Text("These accounts receive parent-support escalation notifications. Website roles are managed separately.")
+                Text("The Primary Administrator is configured in Vercel and cannot be disabled or removed here. Website roles are managed separately.")
             }
         }
         .listStyle(.insetGrouped)
@@ -583,11 +599,14 @@ private struct TelegramSupportAdministratorsView: View {
     @ViewBuilder
     private func administratorRow(_ administrator: TelegramSupportAdministrator) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "paperplane.fill")
+            Image(systemName: administrator.protected ? "checkmark.shield.fill" : "paperplane.fill")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
-                .background(Theme.blue, in: RoundedRectangle(cornerRadius: 11))
+                .background(
+                    administrator.protected ? Theme.green : Theme.blue,
+                    in: RoundedRectangle(cornerRadius: 11)
+                )
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(administrator.displayName)
@@ -601,33 +620,37 @@ private struct TelegramSupportAdministratorsView: View {
             Spacer(minLength: 8)
 
             StatusBadge(
-                text: administrator.active ? "Active" : "Disabled",
+                text: administrator.protected
+                    ? "Primary"
+                    : (administrator.active ? "Active" : "Disabled"),
                 color: administrator.active ? Theme.green : Theme.secondaryText
             )
 
-            Menu {
-                Button {
-                    Task { await setActive(!administrator.active, for: administrator) }
-                } label: {
-                    Label(
-                        administrator.active ? "Disable Notifications" : "Enable Notifications",
-                        systemImage: administrator.active ? "bell.slash" : "bell"
-                    )
-                }
+            if !administrator.protected {
+                Menu {
+                    Button {
+                        Task { await setActive(!administrator.active, for: administrator) }
+                    } label: {
+                        Label(
+                            administrator.active ? "Disable Notifications" : "Enable Notifications",
+                            systemImage: administrator.active ? "bell.slash" : "bell"
+                        )
+                    }
 
-                Button(role: .destructive) {
-                    pendingRemoval = administrator
-                    showRemovalConfirmation = true
+                    Button(role: .destructive) {
+                        pendingRemoval = administrator
+                        showRemovalConfirmation = true
+                    } label: {
+                        Label("Remove Administrator", systemImage: "trash")
+                    }
                 } label: {
-                    Label("Remove Administrator", systemImage: "trash")
+                    Image(systemName: "ellipsis")
+                        .frame(width: 38, height: 44)
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                Image(systemName: "ellipsis")
-                    .frame(width: 38, height: 44)
-                    .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Actions for \(administrator.displayName)")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Actions for \(administrator.displayName)")
         }
         .padding(.vertical, 3)
     }
@@ -650,6 +673,21 @@ private struct TelegramSupportAdministratorsView: View {
         guard state.role == .superuser, !loading else { return }
         loading = true
         defer { loading = false }
+
+#if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestingTelegramAdministrators") {
+            environmentAdministratorConfigured = true
+            administrators = [
+                TelegramSupportAdministrator(values: [
+                    "id": .string("ui-test-added-administrator"),
+                    "display_name": .string("Weekend Support Admin"),
+                    "telegram_chat_id": .string("123456789"),
+                    "active": .bool(true)
+                ])
+            ].compactMap { $0 }
+            return
+        }
+#endif
 
         do {
             let response = try await BackendClient.shared.websiteJSON(
