@@ -211,3 +211,77 @@ enum PaymentFilter: String, CaseIterable {
     case paid
     case unpaid
 }
+
+struct WeekdayMonthlyPaymentSummary: Equatable, Sendable {
+    let sessionCount: Int
+    let payableHours: Double
+    let amount: Double
+}
+
+enum WeekdayMonthlyPaymentCalculator {
+    static let scheduledDays = ["Monday", "Wednesday", "Thursday"]
+
+    static func occurrences(
+        of day: String,
+        in month: Date,
+        calendar: Calendar = .current
+    ) -> Int {
+        let weekdayNumbers = [
+            "Sunday": 1,
+            "Monday": 2,
+            "Tuesday": 3,
+            "Wednesday": 4,
+            "Thursday": 5,
+            "Friday": 6,
+            "Saturday": 7
+        ]
+        guard let target = weekdayNumbers[day],
+              let interval = calendar.dateInterval(of: .month, for: month) else {
+            return 0
+        }
+
+        var count = 0
+        var date = interval.start
+        while date < interval.end {
+            if calendar.component(.weekday, from: date) == target {
+                count += 1
+            }
+            date = calendar.date(byAdding: .day, value: 1, to: date)
+                ?? interval.end
+        }
+        return count
+    }
+
+    static func summary(
+        schedules: [JSONObject],
+        hourlyRate: Double,
+        month: Date,
+        manualHoursByDay: [String: Double] = [:],
+        calendar: Calendar = .current
+    ) -> WeekdayMonthlyPaymentSummary {
+        var sessionCount = 0
+        var payableHours = 0.0
+
+        for schedule in schedules {
+            let day = schedule.text("day")
+            let occurrences = occurrences(
+                of: day,
+                in: month,
+                calendar: calendar
+            )
+            let duration = schedule.number(
+                "duration_hours",
+                fallback: schedule.number("duration", fallback: 1)
+            )
+            sessionCount += occurrences
+            payableHours += manualHoursByDay[day]
+                ?? duration * Double(occurrences)
+        }
+
+        return WeekdayMonthlyPaymentSummary(
+            sessionCount: sessionCount,
+            payableHours: payableHours,
+            amount: payableHours * hourlyRate
+        )
+    }
+}

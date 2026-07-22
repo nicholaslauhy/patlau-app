@@ -599,36 +599,36 @@ struct PaymentsView: View {
             let schedules = student.values["schedules"]?.array?.compactMap(\.object) ?? []
             guard !schedules.isEmpty else { return nil }
             let rate = student.values.number("hourly_rate", fallback: 80)
-            var totalSessions = 0
-            var payableHours = 0.0
-            var amount = 0.0
             var allPaid = true
+            var manualHoursByDay: [String: Double] = [:]
 
             for schedule in schedules {
                 let day = schedule.text("day")
-                let duration = schedule.number("duration_hours", fallback: schedule.number("duration", fallback: 1))
-                let occurrences = weekdayOccurrences(day: day, month: month)
-                let scheduledHours = duration * Double(occurrences)
                 let payment = paymentRecords.first {
                     $0.values.text("weekday_student_id") == student.id
                         && $0.values.text("day_name") == day
                 }
-                let hours = payment?.values["manual_hours"]?.double ?? scheduledHours
-                totalSessions += occurrences
-                payableHours += hours
-                amount += hours * rate
+                if let manualHours = payment?.values["manual_hours"]?.double {
+                    manualHoursByDay[day] = manualHours
+                }
                 allPaid = allPaid && (payment?.values.flag("paid") ?? false)
             }
+            let summary = WeekdayMonthlyPaymentCalculator.summary(
+                schedules: schedules,
+                hourlyRate: rate,
+                month: month,
+                manualHoursByDay: manualHoursByDay
+            )
 
             var values = student.values
             values.merge([
                 "id": .string("weekday-\(student.id)-\(month.monthKey)"),
                 "source_student_id": .string(student.id),
                 "days": .string(schedules.map { $0.text("day") }.joined(separator: ", ")),
-                "sessions": .number(Double(totalSessions)),
-                "payable_hours": .number(payableHours),
+                "sessions": .number(Double(summary.sessionCount)),
+                "payable_hours": .number(summary.payableHours),
                 "rate": .number(rate),
-                "amount": .number(amount),
+                "amount": .number(summary.amount),
                 "paid": .bool(allPaid)
             ]) { _, new in new }
             return DynamicRecord(values: values)
@@ -917,7 +917,9 @@ struct PaymentsView: View {
         for schedule in schedules {
             let day = schedule.text("day")
             let duration = schedule.number("duration_hours", fallback: 1)
-            let scheduledHours = duration * Double(weekdayOccurrences(day: day, month: month))
+            let scheduledHours = duration * Double(
+                WeekdayMonthlyPaymentCalculator.occurrences(of: day, in: month)
+            )
             let existing = paymentRecords.first {
                 $0.values.text("weekday_student_id") == studentID
                     && $0.values.text("day_name") == day
@@ -1158,21 +1160,6 @@ struct PaymentsView: View {
         }
     }
 
-    private func weekdayOccurrences(day: String, month: Date) -> Int {
-        let weekdayMap = ["Sunday": 1, "Monday": 2, "Tuesday": 3, "Wednesday": 4, "Thursday": 5, "Friday": 6, "Saturday": 7]
-        guard let target = weekdayMap[day],
-              let interval = Calendar.current.dateInterval(of: .month, for: month) else {
-            return 0
-        }
-        var count = 0
-        var current = interval.start
-        while current < interval.end {
-            if Calendar.current.component(.weekday, from: current) == target { count += 1 }
-            current = Calendar.current.date(byAdding: .day, value: 1, to: current) ?? interval.end
-        }
-        return count
-    }
-
     private func nextMonthKey(_ date: Date) -> String {
         Calendar.current.date(byAdding: .month, value: 1, to: date)?.monthKey ?? date.monthKey
     }
@@ -1251,7 +1238,12 @@ private struct PaymentAdjustmentSheet: View {
                 } else {
                     let duration = schedule.number("duration_hours", fallback: 1)
                     dayInputs[day] = Self.numberString(
-                        duration * Double(Self.weekdayOccurrences(day: day, month: month))
+                        duration * Double(
+                            WeekdayMonthlyPaymentCalculator.occurrences(
+                                of: day,
+                                in: month
+                            )
+                        )
                     )
                 }
             }
@@ -1385,7 +1377,12 @@ private struct PaymentAdjustmentSheet: View {
             let duration = schedule.number("duration_hours", fallback: 1)
             return PaymentDayAdjustment(
                 day: day,
-                scheduledHours: duration * Double(Self.weekdayOccurrences(day: day, month: month)),
+                scheduledHours: duration * Double(
+                    WeekdayMonthlyPaymentCalculator.occurrences(
+                        of: day,
+                        in: month
+                    )
+                ),
                 manualHours: nil
             )
         }
@@ -1439,20 +1436,4 @@ private struct PaymentAdjustmentSheet: View {
         value.rounded() == value ? String(Int(value)) : String(value)
     }
 
-    private static func weekdayOccurrences(day: String, month: Date) -> Int {
-        let map = ["Sunday": 1, "Monday": 2, "Tuesday": 3, "Wednesday": 4, "Thursday": 5, "Friday": 6, "Saturday": 7]
-        guard let target = map[day],
-              let interval = Calendar.current.dateInterval(of: .month, for: month) else {
-            return 0
-        }
-        var result = 0
-        var current = interval.start
-        while current < interval.end {
-            if Calendar.current.component(.weekday, from: current) == target {
-                result += 1
-            }
-            current = Calendar.current.date(byAdding: .day, value: 1, to: current) ?? interval.end
-        }
-        return result
-    }
 }

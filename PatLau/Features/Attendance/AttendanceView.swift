@@ -17,6 +17,50 @@ enum WeekendAttendancePolicy {
     }
 }
 
+enum HistoricalAttendancePolicy {
+    static func validationError(
+        studentName: String,
+        scheduledDays: [String],
+        selectedDate: Date,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> String? {
+        let name = studentName.isEmpty ? "This student" : studentName
+        let selectedDay = selectedDate.formatted(.dateTime.weekday(.wide))
+
+        if calendar.startOfDay(for: selectedDate) > calendar.startOfDay(for: now) {
+            return "Attendance cannot be recorded for a future date."
+        }
+        guard !scheduledDays.isEmpty else {
+            return "\(name) does not have a training day assigned. Update the student's schedule before recording attendance."
+        }
+        guard scheduledDays.contains(selectedDay) else {
+            let schedule = ListFormatter.localizedString(byJoining: scheduledDays)
+            return "\(name) is scheduled for \(schedule). The selected date is a \(selectedDay), so attendance cannot be recorded for that lesson."
+        }
+        return nil
+    }
+
+    static func timestamp(for selectedDate: Date, recordedAt: Date = Date()) -> String {
+        let operationTimestamp = ISO8601DateFormatter().string(from: recordedAt)
+        return selectedDate.isoDateKey + operationTimestamp.dropFirst(10)
+    }
+
+    static func containsRecord(on dateKey: String, history: [JSONValue]) -> Bool {
+        history.contains { value in
+            guard let rawValue = value.string else { return false }
+            return String(rawValue.prefix(10)) == dateKey
+        }
+    }
+}
+
+enum WeekdayAttendanceScope: String, CaseIterable, Identifiable {
+    case selectedDate = "Selected date"
+    case allSchedules = "All scheduled days"
+
+    var id: String { rawValue }
+}
+
 struct AttendanceView: View {
     @EnvironmentObject private var state: AppState
     @State private var programme: Programme
@@ -28,6 +72,8 @@ struct AttendanceView: View {
     @State private var dayFilter = "All days"
     @State private var timeslotFilter = "All timeslots"
     @State private var levelFilter = "All levels"
+    @State private var weekdayScope: WeekdayAttendanceScope = .selectedDate
+    @State private var weekdayDayFilter = "All scheduled days"
     @State private var selectedRecord: DynamicRecord?
 
     private let showsProgrammePicker: Bool
@@ -60,9 +106,18 @@ struct AttendanceView: View {
                     || record.values.text("student_levelofplay") == levelFilter
                 return matchesDay && matchesTimeslot && matchesLevel
             case .weekday:
-                let weekday = date.formatted(.dateTime.weekday(.wide))
-                return (record.values["schedules"]?.array ?? []).contains {
-                    $0.object?.text("day") == weekday
+                let schedules = record.values["schedules"]?.array?
+                    .compactMap(\.object) ?? []
+                switch weekdayScope {
+                case .selectedDate:
+                    let weekday = date.formatted(.dateTime.weekday(.wide))
+                    return schedules.contains { $0.text("day") == weekday }
+                case .allSchedules:
+                    return !schedules.isEmpty
+                        && (weekdayDayFilter == "All scheduled days"
+                            || schedules.contains {
+                                $0.text("day") == weekdayDayFilter
+                            })
                 }
             case .matchplay:
                 return true
@@ -84,9 +139,15 @@ struct AttendanceView: View {
                             .foregroundStyle(Theme.colour(for: programme))
                     }
                     Spacer()
-                    if programme == .weekday || programme == .oneToOne {
-                        DatePicker("Date", selection: $date, displayedComponents: .date)
+                    if (programme == .weekday && weekdayScope == .selectedDate)
+                        || programme == .oneToOne {
+                        DatePicker(
+                            programme == .weekday ? "Lesson date" : "Date",
+                            selection: $date,
+                            displayedComponents: .date
+                        )
                             .labelsHidden()
+                            .accessibilityIdentifier("attendance-lesson-date")
                     }
                 }
 
@@ -112,7 +173,7 @@ struct AttendanceView: View {
                         selectedRecord = record
                     } label: {
                         VStack(alignment: .leading, spacing: 8) {
-                        RecordCard(record: record, titleKeys: programme == .oneToOne ? ["student_name", "student_id"] : ["student_name"], detailKeys: attendanceDetails, query: search, status: programme == .oneToOne ? record.values.text("attendance_status", fallback: "scheduled") : nil)
+                        RecordCard(record: displayRecord(record), titleKeys: programme == .oneToOne ? ["student_name", "student_id"] : ["student_name"], detailKeys: attendanceDetails, query: search, status: programme == .oneToOne ? record.values.text("attendance_status", fallback: "scheduled") : nil)
                             Label("Tap to update attendance", systemImage: "hand.tap.fill")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Theme.blue)
@@ -142,6 +203,9 @@ struct AttendanceView: View {
                 sourceStudentID: record.values.text("student_id", fallback: record.id),
                 history: attendanceHistory(for: record),
                 onMark: { status in await mark(record, status) },
+                onMarkForDate: { selectedDate in
+                    await mark(record, .attended, attendanceDate: selectedDate)
+                },
                 onMakeup: { target in await markMakeup(record, target: target) },
                 onUndo: { await undo(record) },
                 onReset: { await reset(record) }
@@ -159,10 +223,39 @@ struct AttendanceView: View {
                 level: $levelFilter
             )
         } else if programme == .weekday {
-            Text("Showing students scheduled for \(date.formatted(.dateTime.weekday(.wide))).")
-                .font(.caption)
-                .foregroundStyle(Theme.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 14) {
+                Label("View weekday students", systemImage: "calendar.badge.clock")
+                    .font(.headline)
+                    .foregroundStyle(Theme.colour(for: Programme.weekday))
+
+                Picker("Weekday attendance view", selection: $weekdayScope) {
+                    ForEach(WeekdayAttendanceScope.allCases) { scope in
+                        Text(scope.rawValue).tag(scope)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("weekday-attendance-scope")
+
+                if weekdayScope == .selectedDate {
+                    Text("Showing students scheduled for \(date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated).year())).")
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                } else {
+                    FilterChips(
+                        values: ["All scheduled days"]
+                            + WeekdayMonthlyPaymentCalculator.scheduledDays,
+                        selection: $weekdayDayFilter
+                    )
+                    .accessibilityIdentifier("weekday-scheduled-day-filter")
+
+                    Text(weekdayDayFilter == "All scheduled days"
+                        ? "Showing students across every weekday schedule."
+                        : "Showing students with a \(weekdayDayFilter) session.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+            }
+            .appCard()
         }
     }
 
@@ -173,7 +266,7 @@ struct AttendanceView: View {
         case .weekend:
             ["student_day", "student_timeslot", "attended", "missed", "total_weeks"]
         case .weekday:
-            []
+            ["scheduled_sessions"]
         case .matchplay:
             ["number_of_weeks"]
         }
@@ -193,6 +286,31 @@ struct AttendanceView: View {
     private func load() async {
         loading = records.isEmpty; defer { loading = false }
 #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestingWeekdayAttendance"),
+           programme == .weekday {
+            records = [
+                DynamicRecord(values: [
+                    "id": .string("ui-test-weekday-student-1"),
+                    "student_name": .string("Brandon Teo"),
+                    "schedules": .array([
+                        .object(["day": .string("Wednesday"), "duration_hours": .number(2)]),
+                        .object(["day": .string("Thursday"), "duration_hours": .number(1)])
+                    ]),
+                    "active": .bool(true)
+                ]),
+                DynamicRecord(values: [
+                    "id": .string("ui-test-weekday-student-2"),
+                    "student_name": .string("Monday Student"),
+                    "schedules": .array([
+                        .object(["day": .string("Monday"), "duration_hours": .number(1)])
+                    ]),
+                    "active": .bool(true)
+                ])
+            ]
+            attendanceRecords = []
+            return
+        }
+
         if ProcessInfo.processInfo.arguments.contains("-uiTestingLongAttendanceList"),
            programme == .weekend {
             records = (1...14).map { index in
@@ -283,6 +401,44 @@ struct AttendanceView: View {
         } catch { state.show(error) }
     }
 
+    private func displayRecord(_ record: DynamicRecord) -> DynamicRecord {
+        guard programme == .weekday else { return record }
+
+        let schedules = record.values["schedules"]?.array?
+            .compactMap(\.object) ?? []
+        let displayedSchedules: [JSONObject]
+        if weekdayScope == .selectedDate {
+            let weekday = date.formatted(.dateTime.weekday(.wide))
+            displayedSchedules = schedules.filter { $0.text("day") == weekday }
+        } else if weekdayDayFilter != "All scheduled days" {
+            displayedSchedules = schedules.filter {
+                $0.text("day") == weekdayDayFilter
+            }
+        } else {
+            displayedSchedules = schedules
+        }
+
+        var values = record.values
+        values["scheduled_sessions"] = .string(
+            displayedSchedules.map { schedule in
+                let hours = schedule.number(
+                    "duration_hours",
+                    fallback: schedule.number("duration", fallback: 1)
+                )
+                let duration = hours == 1
+                    ? "1 hour"
+                    : "\(formattedNumber(hours)) hours"
+                return "\(schedule.text("day")) · \(duration)"
+            }
+            .joined(separator: ", ")
+        )
+        return DynamicRecord(values: values)
+    }
+
+    private func formattedNumber(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(value)
+    }
+
     private func canUndo(_ record: DynamicRecord) -> Bool {
         switch programme {
         case .weekend:
@@ -330,12 +486,21 @@ struct AttendanceView: View {
         }
     }
 
-    private func mark(_ record: DynamicRecord, _ status: AttendanceStatus) async -> String? {
+    private func mark(
+        _ record: DynamicRecord,
+        _ status: AttendanceStatus,
+        attendanceDate: Date? = nil
+    ) async -> String? {
         if status == .makeup {
             return await markMakeup(record, target: nil)
         }
-        let dateKey = date.isoDateKey
+        let currentProgrammeDate = (programme == .weekday || programme == .oneToOne)
+            ? date
+            : Date()
+        let effectiveDate = attendanceDate ?? currentProgrammeDate
+        let dateKey = effectiveDate.isoDateKey
         let now = ISO8601DateFormatter().string(from: Date())
+        let isHistoricalEntry = attendanceDate != nil
         do {
             switch programme {
             case .weekend:
@@ -346,8 +511,16 @@ struct AttendanceView: View {
                     throw BackendError.message("This subscription has already used all of its lessons.")
                 }
 
-                if status == .attended {
-                    let today = Date().formatted(.dateTime.weekday(.wide))
+                if status == .attended, isHistoricalEntry {
+                    if let validationError = HistoricalAttendancePolicy.validationError(
+                        studentName: record.values.text("student_name"),
+                        scheduledDays: [record.values.text("student_day")].filter { !$0.isEmpty },
+                        selectedDate: effectiveDate
+                    ) {
+                        throw BackendError.message(validationError)
+                    }
+                } else if status == .attended {
+                    let today = effectiveDate.formatted(.dateTime.weekday(.wide))
                     let trainingDay = record.values.text("student_day")
                     if let validationError = WeekendAttendancePolicy.attendedError(
                         studentName: record.values.text("student_name"),
@@ -361,21 +534,73 @@ struct AttendanceView: View {
                 let field = status == .attended ? "attended" : "missed"
                 let next = record.values.number(field) + 1
                 var history = record.values["attendance_records"]?.array ?? []
-                history.append(.string(status == .attended ? now : "\(now)|missed"))
+                if isHistoricalEntry,
+                   HistoricalAttendancePolicy.containsRecord(on: dateKey, history: history) {
+                    throw BackendError.message(
+                        "Attendance has already been recorded for \(formattedAttendanceDate(effectiveDate)). Undo or review that record before adding another one."
+                    )
+                }
+                let attendanceTimestamp = isHistoricalEntry
+                    ? HistoricalAttendancePolicy.timestamp(for: effectiveDate)
+                    : now
+                history.append(.string(
+                    status == .attended
+                        ? attendanceTimestamp
+                        : "\(attendanceTimestamp)|missed"
+                ))
                 _ = try await BackendClient.shared.update(table: "students", values: [field: .number(next), "attendance_records": .array(history), "updated_at": .string(now)], filters: [.init(name: "student_id", value: "eq.\(record.values.text("student_id"))")])
                 try? await auditWeekend(record, action: status == .attended ? "mark" : "missed")
             case .weekday:
-                let weekday = date.formatted(.dateTime.weekday(.wide))
-                let schedule = record.values["schedules"]?.array?
-                    .compactMap(\.object)
-                    .first { $0.text("day") == weekday }
+                let weekday = effectiveDate.formatted(.dateTime.weekday(.wide))
+                let schedules = record.values["schedules"]?.array?.compactMap(\.object) ?? []
+                if isHistoricalEntry,
+                   let validationError = HistoricalAttendancePolicy.validationError(
+                       studentName: record.values.text("student_name"),
+                       scheduledDays: schedules.map { $0.text("day") }.filter { !$0.isEmpty },
+                       selectedDate: effectiveDate
+                   ) {
+                    throw BackendError.message(validationError)
+                }
+                let schedule = schedules.first { $0.text("day") == weekday }
                 guard let schedule else {
                     throw BackendError.message("This student has no \(weekday) session.")
                 }
+                if isHistoricalEntry,
+                   attendanceRecords.contains(where: {
+                       $0.values.text("weekday_student_id") == record.id
+                           && String($0.values.text("attendance_date").prefix(10)) == dateKey
+                   }) {
+                    throw BackendError.message(
+                        "Attendance has already been recorded for \(formattedAttendanceDate(effectiveDate))."
+                    )
+                }
                 _ = try await BackendClient.shared.insert(table: "weekday_attendance", values: ["weekday_student_id": .string(record.id), "attendance_date": .string(dateKey), "day_name": .string(schedule.text("day", fallback: weekday)), "status": .string(status.rawValue), "duration_hours": .number(schedule.number("duration_hours", fallback: 1)), "updated_at": .string(now)])
             case .matchplay:
-                _ = try await BackendClient.shared.insert(table: "matchplay_attendance", values: ["matchplay_student_id": .string(record.id), "attendance_date": .string(Date().isoDateKey), "status": .string(status.rawValue), "updated_at": .string(now)])
+                if isHistoricalEntry,
+                   Calendar.current.startOfDay(for: effectiveDate) > Calendar.current.startOfDay(for: Date()) {
+                    throw BackendError.message("Attendance cannot be recorded for a future date.")
+                }
+                if isHistoricalEntry,
+                   attendanceRecords.contains(where: {
+                       $0.values.text("matchplay_student_id") == record.id
+                           && String($0.values.text("attendance_date").prefix(10)) == dateKey
+                   }) {
+                    throw BackendError.message(
+                        "Attendance has already been recorded for \(formattedAttendanceDate(effectiveDate))."
+                    )
+                }
+                _ = try await BackendClient.shared.insert(table: "matchplay_attendance", values: ["matchplay_student_id": .string(record.id), "attendance_date": .string(dateKey), "status": .string(status.rawValue), "updated_at": .string(now)])
             case .oneToOne:
+                let session = try await oneToOneSession(
+                    for: record,
+                    attendanceDate: attendanceDate
+                )
+                if isHistoricalEntry,
+                   session.values.text("attendance_status", fallback: "scheduled") != "scheduled" {
+                    throw BackendError.message(
+                        "Attendance has already been recorded for this 1-1 session on \(formattedAttendanceDate(effectiveDate))."
+                    )
+                }
                 _ = try await BackendClient.shared.update(
                     table: "one_to_one_sessions",
                     values: [
@@ -385,14 +610,16 @@ struct AttendanceView: View {
                         "makeup_usage_id": .null,
                         "updated_at": .string(now)
                     ],
-                    filters: [.init(name: "id", value: "eq.\(record.id)")]
+                    filters: [.init(name: "id", value: "eq.\(session.id)")]
                 )
             }
             await load()
             let name = record.values.text("student_name", fallback: "Student")
             switch status {
             case .attended:
-                return "\(name) was successfully marked present."
+                return isHistoricalEntry
+                    ? "\(name) was successfully marked present for \(formattedAttendanceDate(effectiveDate))."
+                    : "\(name) was successfully marked present."
             case .missed:
                 return "\(name) was successfully marked missed."
             case .scheduled:
@@ -404,6 +631,47 @@ struct AttendanceView: View {
             state.show(error.localizedDescription, kind: .error)
             return nil
         }
+    }
+
+    private func oneToOneSession(
+        for record: DynamicRecord,
+        attendanceDate: Date?
+    ) async throws -> DynamicRecord {
+        guard let attendanceDate else { return record }
+        guard Calendar.current.startOfDay(for: attendanceDate)
+                <= Calendar.current.startOfDay(for: Date()) else {
+            throw BackendError.message("Attendance cannot be recorded for a future date.")
+        }
+
+        let studentID = record.values.text("student_id")
+        guard !studentID.isEmpty else {
+            throw BackendError.message("This 1-1 session does not have a student assigned.")
+        }
+        let start = attendanceDate.isoDateKey
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: attendanceDate)?
+            .isoDateKey ?? start
+        let sessions = try await BackendClient.shared.select(
+            table: "one_to_one_sessions",
+            query: [
+                .init(name: "student_id", value: "eq.\(studentID)"),
+                .init(name: "session_date", value: "gte.\(start)"),
+                .init(name: "session_date", value: "lt.\(end)"),
+                .init(name: "order", value: "session_date.asc"),
+                .init(name: "limit", value: "10")
+            ]
+        )
+        guard let session = sessions.first(where: {
+            !$0.values.flag("removed_from_training")
+        }) else {
+            throw BackendError.message(
+                "No 1-1 session is scheduled for \(record.values.text("student_name", fallback: "this student")) on \(formattedAttendanceDate(attendanceDate)). Add the student-coach pairing to that date before recording attendance."
+            )
+        }
+        return session
+    }
+
+    private func formattedAttendanceDate(_ value: Date) -> String {
+        value.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
     }
 
     /// Mirrors the website's makeup-credit workflow. Weekend users consume
@@ -1206,6 +1474,7 @@ private struct AttendanceActionsSheet: View {
     let sourceStudentID: String
     let history: [AttendanceHistoryEntry]
     let onMark: (AttendanceStatus) async -> String?
+    let onMarkForDate: (Date) async -> String?
     let onMakeup: (MakeupTargetSelection?) async -> String?
     let onUndo: () async -> String?
     let onReset: () async -> String?
@@ -1213,6 +1482,7 @@ private struct AttendanceActionsSheet: View {
     @State private var operationMessage: String?
     @State private var actionFeedback: AttendanceActionFeedback?
     @State private var showMakeupProgrammeChooser = false
+    @State private var showHistoricalAttendance = false
 
     var body: some View {
         NavigationStack {
@@ -1303,6 +1573,18 @@ private struct AttendanceActionsSheet: View {
                         }
                     }
                     .tint(Theme.green)
+
+                    Button {
+                        showHistoricalAttendance = true
+                    } label: {
+                        Label("Mark Attended for Another Date", systemImage: "calendar.badge.checkmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(AppPrimaryButtonStyle())
+                    .tint(Theme.green)
+                    .disabled(operationMessage != nil)
+                    .touchTarget()
+                    .accessibilityIdentifier("mark-attended-another-date")
 
                     AsyncActionButton(
                         title: "Mark Missed",
@@ -1406,6 +1688,18 @@ private struct AttendanceActionsSheet: View {
                 onFinished: { dismiss() }
             )
         }
+        .sheet(isPresented: $showHistoricalAttendance) {
+            HistoricalAttendanceSheet(
+                studentName: record.values.text("student_name", fallback: "Student"),
+                programme: programme,
+                scheduledDescription: scheduledDescription,
+                initialDate: suggestedHistoricalDate,
+                onConfirm: onMarkForDate,
+                onFinished: { dismiss() }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
         .overlay {
             if let operationMessage {
                 LoadingOverlay(text: operationMessage)
@@ -1433,6 +1727,202 @@ private struct AttendanceActionsSheet: View {
             actionFeedback = AttendanceActionFeedback(
                 kind: .failure,
                 message: "The action could not be completed. Please try again."
+            )
+        }
+    }
+
+    private var scheduledDescription: String? {
+        switch programme {
+        case .weekend:
+            let session = [
+                record.values.text("student_day"),
+                record.values.text("student_timeslot")
+            ]
+                .filter { !$0.isEmpty }
+                .joined(separator: " • ")
+            return session.isEmpty ? nil : session
+        case .weekday:
+            let days = record.values["schedules"]?.array?
+                .compactMap(\.object)
+                .map { $0.text("day") }
+                .filter { !$0.isEmpty } ?? []
+            return days.isEmpty ? nil : "Scheduled: \(ListFormatter.localizedString(byJoining: days))"
+        case .matchplay:
+            return "Choose the date of the MatchPlay lesson."
+        case .oneToOne:
+            return "The selected date must already have a student-coach pairing."
+        }
+    }
+
+    private var suggestedHistoricalDate: Date {
+        if programme == .oneToOne {
+            let dateKey = String(record.values.text("session_date").prefix(10))
+            let parser = DateFormatter()
+            parser.locale = Locale(identifier: "en_US_POSIX")
+            parser.calendar = Calendar(identifier: .gregorian)
+            parser.dateFormat = "yyyy-MM-dd"
+            if let sessionDate = parser.date(from: dateKey), sessionDate <= Date() {
+                return sessionDate
+            }
+        }
+
+        let scheduledDays: [String]
+        switch programme {
+        case .weekend:
+            scheduledDays = [record.values.text("student_day")].filter { !$0.isEmpty }
+        case .weekday:
+            scheduledDays = record.values["schedules"]?.array?
+                .compactMap(\.object)
+                .map { $0.text("day") }
+                .filter { !$0.isEmpty } ?? []
+        case .matchplay, .oneToOne:
+            scheduledDays = []
+        }
+
+        for offset in 1...7 {
+            guard let candidate = Calendar.current.date(
+                byAdding: .day,
+                value: -offset,
+                to: Date()
+            ) else { continue }
+            if scheduledDays.isEmpty
+                || scheduledDays.contains(candidate.formatted(.dateTime.weekday(.wide))) {
+                return candidate
+            }
+        }
+        return Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+    }
+}
+
+private struct HistoricalAttendanceSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var state: AppState
+
+    let studentName: String
+    let programme: Programme
+    let scheduledDescription: String?
+    let onConfirm: (Date) async -> String?
+    let onFinished: () -> Void
+
+    @State private var selectedDate: Date
+    @State private var operationMessage: String?
+    @State private var feedback: AttendanceActionFeedback?
+
+    init(
+        studentName: String,
+        programme: Programme,
+        scheduledDescription: String?,
+        initialDate: Date,
+        onConfirm: @escaping (Date) async -> String?,
+        onFinished: @escaping () -> Void
+    ) {
+        self.studentName = studentName
+        self.programme = programme
+        self.scheduledDescription = scheduledDescription
+        self.onConfirm = onConfirm
+        self.onFinished = onFinished
+        _selectedDate = State(initialValue: initialDate)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PlainSheetHeader(
+                title: "Mark Another Date",
+                onCancel: { if operationMessage == nil { dismiss() } }
+            )
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Historical attendance", systemImage: "calendar.badge.checkmark")
+                            .font(.headline)
+                            .foregroundStyle(Theme.colour(for: programme))
+                        Text("Choose the actual lesson date that \(studentName) attended.")
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.secondaryText)
+                        if let scheduledDescription, !scheduledDescription.isEmpty {
+                            Text(scheduledDescription)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                    }
+
+                    DatePicker(
+                        "Lesson date",
+                        selection: $selectedDate,
+                        in: ...Date(),
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+                    .accessibilityIdentifier("historical-attendance-date-picker")
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Attendance will be recorded for")
+                            .font(.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                        Text(selectedDate.formatted(
+                            .dateTime.weekday(.wide).day().month(.wide).year()
+                        ))
+                            .font(.headline)
+                            .foregroundStyle(Theme.ink)
+                    }
+                    .appCard()
+
+                    AsyncActionButton(
+                        title: "Mark Attended for This Date",
+                        progressTitle: "Recording historical attendance…",
+                        icon: "checkmark.circle.fill"
+                    ) {
+                        await submit()
+                    }
+                    .tint(Theme.green)
+                    .accessibilityIdentifier("confirm-historical-attendance")
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 20)
+            }
+        }
+        .background(Theme.background)
+        .interactiveDismissDisabled(operationMessage != nil)
+        .overlay {
+            if let operationMessage { LoadingOverlay(text: operationMessage) }
+        }
+        .alert(item: $feedback) { feedback in
+            switch feedback.kind {
+            case .success:
+                Alert(
+                    title: Text("Attendance Updated"),
+                    message: Text(feedback.message),
+                    dismissButton: .default(Text("Done")) {
+                        dismiss()
+                        onFinished()
+                    }
+                )
+            case .failure:
+                Alert(
+                    title: Text("Unable to Update Attendance"),
+                    message: Text(feedback.message),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
+        }
+    }
+
+    private func submit() async {
+        operationMessage = "Recording attendance for \(selectedDate.formatted(.dateTime.day().month(.abbreviated)))"
+        let previousNoticeID = state.notice?.id
+        let result = await onConfirm(selectedDate)
+        operationMessage = nil
+
+        if let result {
+            feedback = AttendanceActionFeedback(kind: .success, message: result)
+        } else if let notice = state.notice, notice.id != previousNoticeID {
+            feedback = AttendanceActionFeedback(kind: .failure, message: notice.text)
+            state.notice = nil
+        } else {
+            feedback = AttendanceActionFeedback(
+                kind: .failure,
+                message: "The historical attendance could not be recorded. Please try again."
             )
         }
     }
