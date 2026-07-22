@@ -8,6 +8,15 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Welcome back"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Sign in"].exists)
         XCTAssertFalse(app.navigationBars["Home"].exists)
+
+        let emailBox = app.descendants(matching: .any)["login-email-container"]
+            .firstMatch
+        let passwordBox = app.descendants(matching: .any)["login-password-container"]
+            .firstMatch
+        XCTAssertTrue(emailBox.exists)
+        XCTAssertTrue(passwordBox.exists)
+        XCTAssertEqual(emailBox.frame.width, passwordBox.frame.width, accuracy: 0.5)
+        XCTAssertEqual(emailBox.frame.height, passwordBox.frame.height, accuracy: 0.5)
     }
 
     func testProgrammeDirectoryAndNativeAttendanceNavigation() throws {
@@ -507,7 +516,10 @@ final class NavigationSmokeTests: XCTestCase {
     }
 
     func testTelegramAdministratorManagementIsSuperuserOnly() throws {
-        let superuserApp = launchApp(arguments: ["-uiTestingRole=superuser"])
+        let superuserApp = launchApp(arguments: [
+            "-uiTestingRole=superuser",
+            "-uiTestingTelegramAdministrators"
+        ])
 
         XCTAssertTrue(superuserApp.navigationBars["Home"].waitForExistence(timeout: 5))
         superuserApp.tabBars.buttons["Account"].tap()
@@ -519,6 +531,17 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertTrue(superuserApp.navigationBars["Telegram Administrators"].waitForExistence(timeout: 4))
         XCTAssertTrue(superuserApp.staticTexts["How to connect an account"].exists)
         XCTAssertTrue(superuserApp.staticTexts["Add Telegram Administrator"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["All Administrators"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["2 active"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["Primary Administrator"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["Configured securely in Vercel"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["PRIMARY"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["Weekend Support Admin"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["Telegram ID ending 6789"].exists)
+        XCTAssertTrue(superuserApp.staticTexts["ACTIVE"].exists)
+        XCTAssertFalse(superuserApp.buttons["Actions for Primary Administrator"].exists)
+        XCTAssertTrue(superuserApp.buttons["Actions for Weekend Support Admin"].exists)
+        keepScreenshot(of: superuserApp, name: "All Telegram Administrators")
         superuserApp.terminate()
 
         let memberApp = launchApp(arguments: ["-uiTestingRole=member"])
