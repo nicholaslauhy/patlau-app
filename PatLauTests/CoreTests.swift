@@ -790,6 +790,76 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testSupportConversationCloseRequiresLatestCompleteCoachReply() {
+        var messages = [
+            DynamicRecord(values: [
+                "id": .number(1),
+                "sender_type": .string("parent"),
+                "content": .string("Is training running this Saturday?"),
+                "created_at": .string("2026-07-25T09:00:00.000Z")
+            ])
+        ]
+
+        XCTAssertFalse(SupportConversationPolicy.canClose(messages: messages))
+
+        messages.append(DynamicRecord(values: [
+            "id": .number(2),
+            "sender_type": .string("superuser"),
+            "content": .string("Hi"),
+            "telegram_delivery_status": .string("sent"),
+            "created_at": .string("2026-07-25T09:01:00.000Z")
+        ]))
+        XCTAssertFalse(SupportConversationPolicy.canClose(messages: messages))
+
+        messages.append(DynamicRecord(values: [
+            "id": .number(3),
+            "sender_type": .string("superuser"),
+            "content": .string("Saturday training continues from 2pm to 4pm at NYGH."),
+            "telegram_delivery_status": .string("sent"),
+            "created_at": .string("2026-07-25T09:02:00.000Z")
+        ]))
+        XCTAssertTrue(SupportConversationPolicy.canClose(messages: messages))
+
+        messages.append(DynamicRecord(values: [
+            "id": .number(4),
+            "sender_type": .string("parent"),
+            "content": .string("What should my child bring?"),
+            "created_at": .string("2026-07-25T09:03:00.000Z")
+        ]))
+        XCTAssertFalse(SupportConversationPolicy.canClose(messages: messages))
+    }
+
+    func testSupportConversationReopenRequiresFreshCoachFollowUp() {
+        let messages = [
+            DynamicRecord(values: [
+                "id": .number(1),
+                "sender_type": .string("parent"),
+                "content": .string("Is training running this Saturday?"),
+                "created_at": .string("2026-07-25T09:00:00.000Z")
+            ]),
+            DynamicRecord(values: [
+                "id": .number(2),
+                "sender_type": .string("superuser"),
+                "content": .string("Saturday training begins at 2pm."),
+                "telegram_delivery_status": .string("sent"),
+                "created_at": .string("2026-07-25T09:01:00.000Z")
+            ]),
+            DynamicRecord(values: [
+                "id": .number(3),
+                "sender_type": .string("system"),
+                "content": .string(SupportConversationPolicy.coachReopenedMessage),
+                "created_at": .string("2026-07-25T09:02:00.000Z")
+            ])
+        ]
+
+        XCTAssertFalse(SupportConversationPolicy.canClose(messages: messages))
+    }
+
+    func testSupportImageAndDeleteUseProtectedWebsiteRoutes() {
+        XCTAssertEqual(SupportWebsiteRoute.summary, "/api/support")
+        XCTAssertEqual(SupportWebsiteRoute.image, "/api/support/image")
+    }
+
     func testSupportConversationUniversalLinkUsesProductionHostAndUUID() {
         let id = "7cda7535-f22d-405e-a996-12f9c30db44d"
         let link = SupportConversationDeepLink.parse(

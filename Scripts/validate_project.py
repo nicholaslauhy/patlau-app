@@ -21,6 +21,9 @@ required_link_markers = {
     'static let customScheme = "patlau"': "free-signing custom URL parser",
     ".onOpenURL": "foreground custom URL handling",
     "case supportConversation(String)": "native conversation navigation route",
+    'static let image = "/api/support/image"': "protected parent-image endpoint",
+    '"expectedParentMessageId"': "latest-parent reply safety token",
+    '"delete_conversation"': "parent conversation deletion action",
 }
 for marker, description in required_link_markers.items():
     if marker not in combined:

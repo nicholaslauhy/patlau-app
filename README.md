@@ -29,6 +29,7 @@ The project is validated with its structural checker, Xcode builds, unit tests, 
 - Primary actions use a minimum 50-point touch target.
 - Search, status badges, pull-to-refresh, confirmation dialogs, and dismissible notices are shared throughout.
 - Server-only features—including Telegram chat replies, payment notices, and coach polls—call the same authenticated PatLau endpoints as the website.
+- Parent-support chats mirror the website's escalation and close/reopen rules, securely load parent images only on request, and support confirmed permanent conversation deletion while retaining the Telegram contact for future chats.
 - Parent-support escalation notifications use the free-signing-compatible `patlau://chats` URL scheme to open the exact native conversation after login and protected-role verification. The HTTPS notification link first opens a small website bridge so users without the app can continue on the website.
 - A clearly labelled Full Website button remains available as an in-app fallback for authorised website tools.
 

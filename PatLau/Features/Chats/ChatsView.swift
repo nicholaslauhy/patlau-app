@@ -8,6 +8,7 @@ private let supportStatuses = [
 
 enum SupportWebsiteRoute {
     static let summary = "/api/support"
+    static let image = "/api/support/image"
 }
 
 enum SupportRefreshSection: String, CaseIterable {
@@ -45,8 +46,8 @@ private func supportStatusLabel(_ value: String) -> String {
     case "ai_active": "AI active"
     case "waiting_parent": "Waiting for parent"
     case "escalated": "Escalated"
-    case "human_active": "Human active"
-    case "resolved": "Resolved"
+    case "human_active": "Coach Patrick active"
+    case "resolved": "Closed"
     case "closed_parent": "Closed by parent"
     default: value.replacingOccurrences(of: "_", with: " ").capitalized
     }
@@ -102,6 +103,113 @@ private func appDateTime(_ value: String) -> String {
             .year()
             .hour()
             .minute()
+    )
+}
+
+enum SupportConversationPolicy {
+    static let parentReopenedMessage = "Conversation reopened. Please type and send your question below."
+    static let coachReopenedMessage = "Coach Patrick reopened this conversation to send a follow-up."
+
+    private static let acknowledgements: Set<String> = [
+        "hi", "hello", "hey", "ok", "okay", "noted", "thanks", "thank",
+        "you", "sure", "alright", "understood", "got", "it"
+    ]
+
+    private static let nonSubstantivePhrases: Set<String> = [
+        "how can i help", "how may i help", "what can i do",
+        "what can i help with", "hi there", "good morning",
+        "good afternoon", "good evening", "你好", "您好", "嗨", "好的",
+        "收到", "谢谢", "謝謝", "明白", "了解", "早上好", "下午好",
+        "晚上好", "hai", "helo", "baik", "terima kasih", "faham",
+        "selamat pagi", "selamat petang", "こんにちは", "ありがとう",
+        "わかりました", "வணக்கம்", "நன்றி", "சரி", "புரிந்தது"
+    ]
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .lowercased()
+            .unicodeScalars
+            .map { CharacterSet.alphanumerics.contains($0) || CharacterSet.whitespaces.contains($0) ? Character($0) : " " }
+            .reduce(into: "") { $0.append($1) }
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+
+    private static func matches(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    static func isSubstantiveCoachReply(_ value: String) -> Bool {
+        let normalizedValue = normalized(value)
+        guard !normalizedValue.isEmpty else { return false }
+
+        let withoutGreeting = normalizedValue.replacingOccurrences(
+            of: #"^(?:(?:hi|hello|hey)(?:\s+there)?|good\s+(?:morning|afternoon|evening))\s*"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !withoutGreeting.isEmpty,
+              !nonSubstantivePhrases.contains(withoutGreeting) else { return false }
+
+        let informationRequest = matches(
+            withoutGreeting,
+            pattern: #"^(?:(?:can|could|would|will)\s+you|please|kindly)\s+(?:send|share|tell|provide|confirm|clarify|explain|describe|forward|upload|let\s+me\s+know)\b"#
+        )
+        let singleQuestion = value.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
+            && matches(
+                withoutGreeting,
+                pattern: #"^(?:what|when|where|which|who|why|how|is|are|do|does|did|can|could|would)\b"#
+            )
+        if informationRequest || singleQuestion { return false }
+
+        let words = withoutGreeting
+            .split(separator: " ")
+            .map(String.init)
+            .filter { !acknowledgements.contains($0) }
+        if withoutGreeting.unicodeScalars.contains(where: { $0.value > 127 }) {
+            return withoutGreeting.filter { !$0.isWhitespace }.count >= 6
+        }
+        return withoutGreeting.count >= 15 && words.count >= 3
+    }
+
+    static func canClose(messages: [DynamicRecord]) -> Bool {
+        let ordered = messages.enumerated().sorted { left, right in
+            let leftDate = parseDate(left.element.values.text("created_at"))
+            let rightDate = parseDate(right.element.values.text("created_at"))
+            guard let leftDate, let rightDate else { return left.offset < right.offset }
+            return leftDate == rightDate ? left.offset < right.offset : leftDate < rightDate
+        }.map(\.element)
+
+        var baseline = -1
+        for (index, message) in ordered.enumerated() {
+            let sender = message.values.text("sender_type")
+            let content = message.values.text("content")
+            if sender == "parent"
+                || (sender == "system"
+                    && [parentReopenedMessage, coachReopenedMessage].contains(content)) {
+                baseline = index
+            }
+        }
+        guard baseline >= 0, baseline + 1 < ordered.count else { return false }
+
+        return ordered[(baseline + 1)...].contains { message in
+            message.values.text("sender_type") == "superuser"
+                && message.values.text("telegram_delivery_status") != "sent_unverified_context"
+                && isSubstantiveCoachReply(message.values.text("content"))
+        }
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+}
+
+extension Notification.Name {
+    static let supportConversationDeleted = Notification.Name(
+        "PatLauSupportConversationDeleted"
     )
 }
 
@@ -209,6 +317,13 @@ struct ChatsView: View {
         .navigationTitle("Chats")
         .task(id: tab) { await load() }
         .refreshable { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .supportConversationDeleted)) {
+            notification in
+            guard let conversationID = notification.object as? String else { return }
+            conversations.removeAll {
+                $0.id.caseInsensitiveCompare(conversationID) == .orderedSame
+            }
+        }
         .sheet(item: $editor) { kind in
             SupportEditorSheet(kind: kind) { await load() }
         }
@@ -794,8 +909,52 @@ struct SupportConversationDeepLinkView: View {
     }
 }
 
+private enum SupportConversationConfirmation: Identifiable {
+    case close
+    case reopenAsCoach
+    case reopenWithAI
+    case delete
+
+    var id: String {
+        switch self {
+        case .close: "close"
+        case .reopenAsCoach: "reopen-as-coach"
+        case .reopenWithAI: "reopen-with-ai"
+        case .delete: "delete"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .close: "Close this conversation?"
+        case .reopenAsCoach: "Reopen as Coach Patrick?"
+        case .reopenWithAI: "Reopen with the AI assistant?"
+        case .delete: "Delete this conversation permanently?"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .close:
+            "The full history will remain available, and the parent can reopen the conversation from Telegram."
+        case .reopenAsCoach:
+            "The parent will be notified. The AI will stay paused while you send a correction or follow-up."
+        case .reopenWithAI:
+            "The parent will be notified and can continue messaging with the AI assistant."
+        case .delete:
+            "All messages and status history in this conversation will be permanently removed. The parent contact will remain, and their next message will begin a fresh conversation."
+        }
+    }
+
+    var isDestructive: Bool {
+        if case .delete = self { return true }
+        return false
+    }
+}
+
 private struct ConversationView: View {
     @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
 
     let conversation: DynamicRecord
 
@@ -805,11 +964,22 @@ private struct ConversationView: View {
     @State private var loading = false
     @State private var busy = false
     @State private var errorMessage: String?
+    @State private var confirmation: SupportConversationConfirmation?
 
     private var activeConversation: DynamicRecord { details ?? conversation }
     private var contact: JSONObject { activeConversation.values["contact"]?.object ?? [:] }
+    private var status: String { activeConversation.values.text("status") }
     private var blocked: Bool {
         activeConversation.values.flag("contact_blocked") || contact.flag("blocked")
+    }
+    private var isClosed: Bool {
+        ["resolved", "closed_parent"].contains(status)
+    }
+    private var canClose: Bool {
+        status == "human_active" && SupportConversationPolicy.canClose(messages: messages)
+    }
+    private var latestParentMessageID: String {
+        messages.last(where: { $0.values.text("sender_type") == "parent" })?.id ?? ""
     }
 
     var body: some View {
@@ -848,7 +1018,11 @@ private struct ConversationView: View {
                                 message: "The Telegram history will appear here."
                             )
                         } else {
-                            ForEach(messages) { message in
+                            ForEach(Array(messages.enumerated()), id: \.element.id) {
+                                index, message in
+                                if let handoff = handoffMarker(before: index, message: message) {
+                                    SupportHandoffMarker(kind: handoff)
+                                }
                                 MessageBubble(
                                     message: message,
                                     parentName: supportContactName(activeConversation)
@@ -868,7 +1042,11 @@ private struct ConversationView: View {
             }
 
             Divider()
-            replyComposer
+            if isClosed {
+                closedConversationNotice
+            } else {
+                replyComposer
+            }
         }
         .background(Theme.background)
         .navigationTitle(supportContactName(activeConversation))
@@ -887,6 +1065,43 @@ private struct ConversationView: View {
         } message: {
             Text(errorMessage ?? "The chat action could not be completed.")
         }
+        .alert(item: $confirmation) { action in
+            Alert(
+                title: Text(action.title),
+                message: Text(action.message),
+                primaryButton: action.isDestructive
+                    ? .destructive(Text("Delete")) {
+                        Task { await deleteConversation() }
+                    }
+                    : .default(Text(confirmButtonTitle(for: action))) {
+                        Task { await performConfirmed(action) }
+                    },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    private func handoffMarker(
+        before index: Int,
+        message: DynamicRecord
+    ) -> SupportHandoffMarker.Kind? {
+        let sender = message.values.text("sender_type")
+        guard sender == "superuser" || sender == "ai" else { return nil }
+
+        var previous: String?
+        if index > 0 {
+            for cursor in stride(from: index - 1, through: 0, by: -1) {
+                let candidate = messages[cursor].values.text("sender_type")
+                if candidate == "superuser" || candidate == "ai" {
+                    previous = candidate
+                    break
+                }
+            }
+        }
+
+        if sender == "superuser" && previous != "superuser" { return .coach }
+        if sender == "ai" && previous == "superuser" { return .ai }
+        return nil
     }
 
     private var conversationHeader: some View {
@@ -934,30 +1149,98 @@ private struct ConversationView: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeading(
                 title: "Conversation control",
-                subtitle: activeConversation.values.text("status") == "human_active"
-                    ? "AI is paused while you handle this chat."
-                    : "Sending a reply automatically takes over this chat."
+                subtitle: conversationModeDescription
             )
 
-            HStack(spacing: 16) {
-                if activeConversation.values.text("status") != "human_active" {
-                    actionButton("Take over", icon: "person.fill.checkmark", color: Theme.amber) {
-                        await setStatus("human_active", reason: "Superuser took over the conversation.")
+            if isClosed {
+                HStack(spacing: 16) {
+                    confirmationButton(
+                        "Reopen as Coach Patrick",
+                        icon: "person.fill.checkmark",
+                        color: Theme.amber,
+                        action: .reopenAsCoach
+                    )
+                    if status == "resolved" {
+                        confirmationButton(
+                            "Reopen with AI",
+                            icon: "sparkles",
+                            color: Theme.blue,
+                            action: .reopenWithAI
+                        )
                     }
                 }
-                if !["ai_active", "waiting_parent"].contains(activeConversation.values.text("status")) {
-                    actionButton("Return to AI", icon: "sparkles", color: Theme.blue) {
-                        await setStatus("ai_active", reason: "Returned to AI by superuser.")
+            } else {
+                HStack(spacing: 16) {
+                    if status != "human_active" {
+                        actionButton(
+                            "Take over as Coach Patrick",
+                            icon: "person.fill.checkmark",
+                            color: Theme.amber
+                        ) {
+                            await setStatus(
+                                "human_active",
+                                reason: "Coach Patrick took over the conversation."
+                            )
+                        }
+                    }
+                    if ["escalated", "human_active"].contains(status) {
+                        actionButton("Return to AI", icon: "sparkles", color: Theme.blue) {
+                            await setStatus(
+                                "ai_active",
+                                reason: "Returned to the AI assistant by Coach Patrick."
+                            )
+                        }
+                    }
+                    if canClose {
+                        confirmationButton(
+                            "Close conversation",
+                            icon: "checkmark.circle",
+                            color: Theme.green,
+                            action: .close
+                        )
                     }
                 }
-                if activeConversation.values.text("status") != "resolved" {
-                    actionButton("Resolve", icon: "checkmark.circle", color: Theme.green) {
-                        await setStatus("resolved", reason: "Resolved by superuser.")
-                    }
+
+                if status == "human_active" && !canClose {
+                    Text("A close option appears after Coach Patrick sends a complete reply to the parent’s latest message.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            Divider()
+
+            Button(role: .destructive) {
+                confirmation = .delete
+            } label: {
+                Label("Delete conversation", systemImage: "trash")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
         }
         .appCard()
+    }
+
+    private var conversationModeDescription: String {
+        switch status {
+        case "ai_active":
+            "The AI assistant is handling this conversation. Taking over pauses it."
+        case "waiting_parent":
+            "The AI assistant has replied and is waiting for the parent."
+        case "escalated":
+            "Coach Patrick’s attention is required. The AI assistant is paused."
+        case "human_active":
+            "The AI assistant is paused while Coach Patrick handles this chat."
+        case "resolved":
+            "This conversation is closed. Reopen it before sending another reply."
+        case "closed_parent":
+            "The parent closed this conversation. Reopen as Coach Patrick only for an important follow-up."
+        default:
+            "Review the latest conversation state before taking action."
+        }
     }
 
     private func actionButton(
@@ -983,10 +1266,56 @@ private struct ConversationView: View {
         .disabled(busy)
     }
 
+    private func confirmationButton(
+        _ title: String,
+        icon: String,
+        color: Color,
+        action: SupportConversationConfirmation
+    ) -> some View {
+        Button {
+            confirmation = action
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.headline)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .multilineTextAlignment(.center)
+            }
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, minHeight: 54)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+    }
+
+    private var closedConversationNotice: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "lock.fill")
+                .foregroundStyle(status == "closed_parent" ? Theme.secondaryText : Theme.green)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(status == "closed_parent"
+                     ? "The parent closed this conversation"
+                     : "This conversation is closed")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(Theme.ink)
+                Text(status == "closed_parent"
+                     ? "Replies are disabled. Reopen as Coach Patrick above only for an important correction or follow-up."
+                     : "Replies are disabled until you reopen the conversation above.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.bar)
+    }
+
     private var replyComposer: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("Reply through Telegram", text: $reply, axis: .vertical)
+                TextField("Reply as Coach Patrick", text: $reply, axis: .vertical)
                     .lineLimit(1...4)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
@@ -1016,9 +1345,18 @@ private struct ConversationView: View {
                 .accessibilityLabel("Send reply")
             }
 
-            Text("\(reply.count)/3,900 characters")
-                .font(.caption2)
-                .foregroundStyle(Theme.secondaryText)
+            HStack(alignment: .firstTextBaseline) {
+                Text(status == "human_active"
+                     ? "AI is paused. This reply will be identified as Coach Patrick."
+                     : "Sending this reply pauses the AI and takes over the conversation.")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Text("\(reply.count)/3,900")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(Theme.secondaryText)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1060,12 +1398,13 @@ private struct ConversationView: View {
                 body: [
                     "action": .string("send_message"),
                     "conversationId": .string(conversation.id),
-                    "content": .string(text)
+                    "content": .string(text),
+                    "expectedParentMessageId": .string(latestParentMessageID)
                 ]
             )
             reply = ""
             await load()
-            state.show("Reply sent to Telegram.")
+            state.show("Reply sent to the parent through Telegram.")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1075,7 +1414,7 @@ private struct ConversationView: View {
         busy = true
         defer { busy = false }
         do {
-            _ = try await BackendClient.shared.websiteJSON(
+            let response = try await BackendClient.shared.websiteJSON(
                 path: SupportWebsiteRoute.summary,
                 method: "POST",
                 body: [
@@ -1086,11 +1425,110 @@ private struct ConversationView: View {
                 ]
             )
             await load()
-            state.show("Conversation marked \(supportStatusLabel(status).lowercased()).")
+            if let warning = response.object?.text("warning"), !warning.isEmpty {
+                state.show(warning, kind: .error)
+            } else {
+                state.show("Conversation marked \(supportStatusLabel(status).lowercased()).")
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
     }
+
+    private func confirmButtonTitle(
+        for action: SupportConversationConfirmation
+    ) -> String {
+        switch action {
+        case .close: "Close Conversation"
+        case .reopenAsCoach: "Reopen as Coach Patrick"
+        case .reopenWithAI: "Reopen with AI"
+        case .delete: "Delete"
+        }
+    }
+
+    private func performConfirmed(_ action: SupportConversationConfirmation) async {
+        switch action {
+        case .close:
+            await setStatus(
+                "resolved",
+                reason: "Conversation closed by Coach Patrick."
+            )
+        case .reopenAsCoach:
+            await setStatus(
+                "human_active",
+                reason: "Closed conversation reopened by Coach Patrick for a follow-up."
+            )
+        case .reopenWithAI:
+            await setStatus(
+                "ai_active",
+                reason: "Closed conversation reopened with the AI assistant by Coach Patrick."
+            )
+        case .delete:
+            await deleteConversation()
+        }
+    }
+
+    private func deleteConversation() async {
+        busy = true
+        defer { busy = false }
+        do {
+            _ = try await BackendClient.shared.websiteJSON(
+                path: SupportWebsiteRoute.summary,
+                method: "POST",
+                body: [
+                    "action": .string("delete_conversation"),
+                    "conversationId": .string(conversation.id)
+                ]
+            )
+            NotificationCenter.default.post(
+                name: .supportConversationDeleted,
+                object: conversation.id
+            )
+            state.show("Parent conversation deleted.")
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct SupportHandoffMarker: View {
+    enum Kind {
+        case coach
+        case ai
+    }
+
+    let kind: Kind
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Rectangle()
+                .fill(Theme.border)
+                .frame(height: 1)
+            Image(systemName: kind == .coach ? "person.fill" : "sparkles")
+                .foregroundStyle(kind == .coach ? Theme.amber : Theme.blue)
+            Text(kind == .coach
+                 ? "Coach Patrick joined the conversation"
+                 : "AI assistant resumed the conversation")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.secondaryText)
+                .multilineTextAlignment(.center)
+            Rectangle()
+                .fill(Theme.border)
+                .frame(height: 1)
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+private func supportDisplayMessageContent(_ message: DynamicRecord) -> String {
+    let content = message.values.text("content")
+    guard message.values.text("sender_type") != "parent" else { return content }
+    return content.replacingOccurrences(
+        of: #"Coach\s+Nicholas"#,
+        with: "Coach Patrick",
+        options: [.regularExpression, .caseInsensitive]
+    )
 }
 
 private struct MessageBubble: View {
@@ -1106,9 +1544,18 @@ private struct MessageBubble: View {
     private var senderName: String {
         switch message.values.text("sender_type") {
         case "parent": parentName
-        case "superuser": "You"
+        case "superuser": "Coach Patrick"
         case "ai": "AI assistant"
-        default: "System"
+        default: "System update"
+        }
+    }
+
+    private var senderBadge: String {
+        switch message.values.text("sender_type") {
+        case "parent": "Parent message"
+        case "superuser": "Human reply"
+        case "ai": "AI-generated reply"
+        default: "Status update"
         }
     }
 
@@ -1117,16 +1564,25 @@ private struct MessageBubble: View {
             if outbound { Spacer(minLength: 42) }
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(senderName)
-                        .font(.caption.weight(.bold))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(senderName)
+                            .font(.caption.weight(.bold))
+                        Text(senderBadge)
+                            .font(.caption2)
+                            .opacity(0.75)
+                    }
                     Spacer(minLength: 10)
                     Text(appDateTime(message.values.text("created_at")))
                         .font(.caption2)
                         .opacity(0.8)
                 }
-                Text(message.values.text("content"))
+                Text(supportDisplayMessageContent(message))
                     .font(.body)
                     .textSelection(.enabled)
+
+                if message.values.flag("has_image") {
+                    SupportParentImagePreview(messageID: message.id)
+                }
 
                 let sources = message.values["source_refs"]?.array?.compactMap(\.string) ?? []
                 if !sources.isEmpty {
@@ -1142,6 +1598,116 @@ private struct MessageBubble: View {
                 in: RoundedRectangle(cornerRadius: 15, style: .continuous)
             )
             if !outbound { Spacer(minLength: 42) }
+        }
+    }
+}
+
+private struct SupportParentImagePreview: View {
+    private enum LoadState {
+        case idle
+        case loading
+        case ready
+        case failed
+    }
+
+    let messageID: String
+
+    @State private var loadState: LoadState = .idle
+    @State private var image: UIImage?
+    @State private var showsFullSize = false
+
+    var body: some View {
+        Group {
+            switch loadState {
+            case .idle:
+                VStack(alignment: .leading, spacing: 5) {
+                    Button {
+                        Task { await loadImage() }
+                    } label: {
+                        Label("View parent image", systemImage: "photo")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    Text("Loads securely only when you choose to view it.")
+                        .font(.caption2)
+                        .opacity(0.78)
+                }
+                .padding(.top, 4)
+            case .loading:
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Loading parent image…")
+                        .font(.caption)
+                }
+                .padding(.vertical, 8)
+            case .ready:
+                if let image {
+                    Button {
+                        showsFullSize = true
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxWidth: 300, maxHeight: 260)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            Label("Open full size", systemImage: "arrow.up.left.and.arrow.down.right")
+                                .font(.caption.weight(.semibold))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            case .failed:
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Could not load this parent image.")
+                        .font(.caption.weight(.semibold))
+                    Button("Try Again") {
+                        Task { await loadImage() }
+                    }
+                    .font(.caption.weight(.bold))
+                    .buttonStyle(.plain)
+                }
+                .padding(.vertical, 6)
+            }
+        }
+        .sheet(isPresented: $showsFullSize) {
+            NavigationStack {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .padding(12)
+                    }
+                }
+                .navigationTitle("Parent Image")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Close") { showsFullSize = false }
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func loadImage() async {
+        loadState = .loading
+        do {
+            let data = try await BackendClient.shared.websiteData(
+                path: "\(SupportWebsiteRoute.image)?message_id=\(messageID)"
+            )
+            guard let decoded = UIImage(data: data) else {
+                throw BackendError.message("The parent image was not in a supported format.")
+            }
+            image = decoded
+            loadState = .ready
+        } catch {
+            guard !error.isExpectedCancellation else { return }
+            image = nil
+            loadState = .failed
         }
     }
 }
