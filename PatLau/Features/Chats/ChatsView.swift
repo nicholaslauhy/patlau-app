@@ -965,6 +965,9 @@ private struct ConversationView: View {
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var confirmation: SupportConversationConfirmation?
+    @FocusState private var replyFieldFocused: Bool
+
+    private let topAnchorID = "conversation-top"
 
     private var activeConversation: DynamicRecord { details ?? conversation }
     private var contact: JSONObject { activeConversation.values["contact"]?.object ?? [:] }
@@ -985,59 +988,98 @@ private struct ConversationView: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        conversationHeader
-                        conversationActions
+                ZStack(alignment: .bottomTrailing) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            conversationHeader
+                                .id(topAnchorID)
+                            conversationActions
 
-                        HStack {
-                            Text("\(messages.count) message\(messages.count == 1 ? "" : "s")")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Theme.secondaryText)
-                            Spacer()
-                            DataRefreshButton(scope: "conversation messages") {
-                                await load()
-                            }
-                        }
-
-                        if blocked {
-                            Label(
-                                "This Telegram contact is blocked. Replies cannot be sent.",
-                                systemImage: "hand.raised.fill"
-                            )
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(Theme.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .appCard()
-                        }
-
-                        if messages.isEmpty && !loading {
-                            EmptyState(
-                                icon: "bubble.left",
-                                title: "No messages yet",
-                                message: "The Telegram history will appear here."
-                            )
-                        } else {
-                            ForEach(Array(messages.enumerated()), id: \.element.id) {
-                                index, message in
-                                if let handoff = handoffMarker(before: index, message: message) {
-                                    SupportHandoffMarker(kind: handoff)
+                            HStack {
+                                Text("\(messages.count) message\(messages.count == 1 ? "" : "s")")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Theme.secondaryText)
+                                Spacer()
+                                DataRefreshButton(scope: "conversation messages") {
+                                    await load()
                                 }
-                                MessageBubble(
-                                    message: message,
-                                    parentName: supportContactName(activeConversation)
+                            }
+
+                            if blocked {
+                                Label(
+                                    "This Telegram contact is blocked. Replies cannot be sent.",
+                                    systemImage: "hand.raised.fill"
                                 )
-                                .id(message.id)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .appCard()
+                            }
+
+                            if messages.isEmpty && !loading {
+                                EmptyState(
+                                    icon: "bubble.left",
+                                    title: "No messages yet",
+                                    message: "The Telegram history will appear here."
+                                )
+                            } else {
+                                ForEach(Array(messages.enumerated()), id: \.element.id) {
+                                    index, message in
+                                    if let handoff = handoffMarker(before: index, message: message) {
+                                        SupportHandoffMarker(kind: handoff)
+                                    }
+                                    MessageBubble(
+                                        message: message,
+                                        parentName: supportContactName(activeConversation)
+                                    )
+                                    .id(message.id)
+                                }
                             }
                         }
+                        .padding(.horizontal, 18)
+                        .padding(.top, 16)
+                        .padding(.bottom, 70)
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 16)
-                }
-                .onChange(of: messages.count) { _, _ in
-                    if let last = messages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                    .scrollDismissesKeyboard(.interactively)
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 12)
+                            .onChanged { value in
+                                if value.translation.height > 12 {
+                                    replyFieldFocused = false
+                                }
+                            }
+                    )
+
+                    Button {
+                        replyFieldFocused = false
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            proxy.scrollTo(topAnchorID, anchor: .top)
+                        }
+                    } label: {
+                        Label("Top", systemImage: "arrow.up")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Theme.blue)
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 42)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Theme.border)
+                            )
                     }
+                    .buttonStyle(.plain)
+                    .shadow(color: Color.black.opacity(0.10), radius: 8, y: 3)
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 14)
+                    .accessibilityLabel("Return to top of conversation")
+
+                    Color.clear
+                        .frame(width: 0, height: 0)
+                        .onChange(of: messages.count) { _, _ in
+                            if let last = messages.last {
+                                withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                            }
+                        }
                 }
             }
 
@@ -1317,6 +1359,7 @@ private struct ConversationView: View {
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("Reply as Coach Patrick", text: $reply, axis: .vertical)
                     .lineLimit(1...4)
+                    .focused($replyFieldFocused)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
@@ -1403,6 +1446,7 @@ private struct ConversationView: View {
                 ]
             )
             reply = ""
+            replyFieldFocused = false
             await load()
             state.show("Reply sent to the parent through Telegram.")
         } catch {
