@@ -978,11 +978,38 @@ private enum SupportConversationConfirmation: Identifiable {
     }
 }
 
-private struct ConversationTopOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+enum SupportConversationScrollDestination: String, CaseIterable, Identifiable {
+    case top = "conversation-top"
+    case bottom = "conversation-bottom"
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .top: "Top"
+        case .bottom: "Bottom"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .top: "arrow.up"
+        case .bottom: "arrow.down"
+        }
+    }
+
+    var anchor: UnitPoint {
+        switch self {
+        case .top: .top
+        case .bottom: .bottom
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .top: "Return to top of conversation"
+        case .bottom: "Scroll to bottom of conversation"
+        }
     }
 }
 
@@ -1000,12 +1027,7 @@ private struct ConversationView: View {
     @State private var errorMessage: String?
     @State private var confirmation: SupportConversationConfirmation?
     @State private var pendingDeletionRequest: SupportConversationDeletionRequest?
-    @State private var isNearConversationTop = true
     @FocusState private var replyFieldFocused: Bool
-
-    private let topAnchorID = "conversation-top"
-    private let bottomAnchorID = "conversation-bottom"
-    private let scrollCoordinateSpace = "conversation-scroll"
 
     private var activeConversation: DynamicRecord { details ?? conversation }
     private var contact: JSONObject { activeConversation.values["contact"]?.object ?? [:] }
@@ -1029,16 +1051,9 @@ private struct ConversationView: View {
                 ZStack(alignment: .bottomTrailing) {
                     ScrollView {
                         VStack(spacing: 0) {
-                            GeometryReader { geometry in
-                                Color.clear.preference(
-                                    key: ConversationTopOffsetPreferenceKey.self,
-                                    value: geometry.frame(
-                                        in: .named(scrollCoordinateSpace)
-                                    ).minY
-                                )
-                            }
-                            .frame(height: 0)
-                            .id(topAnchorID)
+                            Color.clear
+                                .frame(height: 1)
+                                .id(SupportConversationScrollDestination.top.id)
 
                             LazyVStack(alignment: .leading, spacing: 14) {
                                 conversationHeader
@@ -1090,13 +1105,9 @@ private struct ConversationView: View {
 
                             Color.clear
                                 .frame(height: 1)
-                                .id(bottomAnchorID)
+                                .id(SupportConversationScrollDestination.bottom.id)
                         }
                         .padding(.bottom, 70)
-                    }
-                    .coordinateSpace(name: scrollCoordinateSpace)
-                    .onPreferenceChange(ConversationTopOffsetPreferenceKey.self) {
-                        isNearConversationTop = $0 >= -44
                     }
                     .scrollDismissesKeyboard(.interactively)
                     .simultaneousGesture(
@@ -1108,38 +1119,36 @@ private struct ConversationView: View {
                             }
                     )
 
-                    Button {
-                        replyFieldFocused = false
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            proxy.scrollTo(
-                                isNearConversationTop ? bottomAnchorID : topAnchorID,
-                                anchor: isNearConversationTop ? .bottom : .top
-                            )
+                    HStack(spacing: 4) {
+                        ForEach(SupportConversationScrollDestination.allCases) { destination in
+                            Button {
+                                replyFieldFocused = false
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    proxy.scrollTo(
+                                        destination.id,
+                                        anchor: destination.anchor
+                                    )
+                                }
+                            } label: {
+                                Label(destination.title, systemImage: destination.systemImage)
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(Theme.blue)
+                                    .padding(.horizontal, 10)
+                                    .frame(minHeight: 42)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(destination.accessibilityLabel)
                         }
-                    } label: {
-                        Label(
-                            isNearConversationTop ? "Bottom" : "Top",
-                            systemImage: isNearConversationTop ? "arrow.down" : "arrow.up"
-                        )
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(Theme.blue)
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 42)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Theme.border)
-                            )
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 4)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Theme.border)
+                    )
                     .shadow(color: Color.black.opacity(0.10), radius: 8, y: 3)
                     .padding(.trailing, 18)
                     .padding(.bottom, 14)
-                    .accessibilityLabel(
-                        isNearConversationTop
-                            ? "Scroll to bottom of conversation"
-                            : "Return to top of conversation"
-                    )
 
                     Color.clear
                         .frame(width: 0, height: 0)

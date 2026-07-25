@@ -860,6 +860,21 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(SupportWebsiteRoute.image, "/api/support/image")
     }
 
+    func testSupportConversationExposesTopAndBottomScrollControls() {
+        XCTAssertEqual(
+            SupportConversationScrollDestination.allCases.map(\.title),
+            ["Top", "Bottom"]
+        )
+        XCTAssertEqual(
+            SupportConversationScrollDestination.allCases.map(\.rawValue),
+            ["conversation-top", "conversation-bottom"]
+        )
+        XCTAssertEqual(
+            SupportConversationScrollDestination.bottom.accessibilityLabel,
+            "Scroll to bottom of conversation"
+        )
+    }
+
     func testSupportConversationDeletionIncludesConfirmationVersion() throws {
         let conversation = DynamicRecord(values: [
             "id": .string("7cda7535-f22d-405e-a996-12f9c30db44d"),
