@@ -24,6 +24,7 @@ required_link_markers = {
     'static let image = "/api/support/image"': "protected parent-image endpoint",
     '"expectedParentMessageId"': "latest-parent reply safety token",
     '"delete_conversation"': "parent conversation deletion action",
+    '"expectedUpdatedAt"': "versioned parent-conversation deletion",
 }
 for marker, description in required_link_markers.items():
     if marker not in combined:

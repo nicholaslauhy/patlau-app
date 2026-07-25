@@ -11,6 +11,32 @@ enum SupportWebsiteRoute {
     static let image = "/api/support/image"
 }
 
+struct SupportConversationDeletionRequest {
+    let conversationID: String
+    let expectedUpdatedAt: String
+
+    init?(conversation: DynamicRecord) {
+        let conversationID = conversation.id.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let expectedUpdatedAt = conversation.values.text("updated_at")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard UUID(uuidString: conversationID) != nil,
+              !expectedUpdatedAt.isEmpty else { return nil }
+
+        self.conversationID = conversationID
+        self.expectedUpdatedAt = expectedUpdatedAt
+    }
+
+    var body: JSONObject {
+        [
+            "action": .string("delete_conversation"),
+            "conversationId": .string(conversationID),
+            "expectedUpdatedAt": .string(expectedUpdatedAt)
+        ]
+    }
+}
+
 enum SupportRefreshSection: String, CaseIterable {
     case inbox = "Inbox"
     case knowledge = "Knowledge"
@@ -973,6 +999,7 @@ private struct ConversationView: View {
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var confirmation: SupportConversationConfirmation?
+    @State private var pendingDeletionRequest: SupportConversationDeletionRequest?
     @State private var isNearConversationTop = true
     @FocusState private var replyFieldFocused: Bool
 
@@ -1159,7 +1186,11 @@ private struct ConversationView: View {
                     : .default(Text(confirmButtonTitle(for: action))) {
                         Task { await performConfirmed(action) }
                     },
-                secondaryButton: .cancel()
+                secondaryButton: .cancel {
+                    if action.isDestructive {
+                        pendingDeletionRequest = nil
+                    }
+                }
             )
         }
     }
@@ -1295,7 +1326,7 @@ private struct ConversationView: View {
             Divider()
 
             Button(role: .destructive) {
-                confirmation = .delete
+                prepareConversationDeletion()
             } label: {
                 Label("Delete conversation", systemImage: "trash")
                     .font(.subheadline.weight(.semibold))
@@ -1553,24 +1584,50 @@ private struct ConversationView: View {
         }
     }
 
+    private func prepareConversationDeletion() {
+        guard let request = SupportConversationDeletionRequest(
+            conversation: activeConversation
+        ) else {
+            errorMessage = "Refresh this conversation before trying to delete it."
+            return
+        }
+        pendingDeletionRequest = request
+        confirmation = .delete
+    }
+
     private func deleteConversation() async {
+        guard let request = pendingDeletionRequest else {
+            errorMessage = "The deletion confirmation expired. Open Delete conversation again."
+            return
+        }
+
         busy = true
-        defer { busy = false }
+        defer {
+            busy = false
+            pendingDeletionRequest = nil
+        }
         do {
             _ = try await BackendClient.shared.websiteJSON(
                 path: SupportWebsiteRoute.summary,
                 method: "POST",
-                body: [
-                    "action": .string("delete_conversation"),
-                    "conversationId": .string(conversation.id)
-                ]
+                body: request.body
             )
             NotificationCenter.default.post(
                 name: .supportConversationDeleted,
-                object: conversation.id
+                object: request.conversationID
             )
             state.show("Parent conversation deleted.")
             dismiss()
+        } catch BackendError.http(let status, _) where status == 404 {
+            NotificationCenter.default.post(
+                name: .supportConversationDeleted,
+                object: request.conversationID
+            )
+            state.show("This conversation had already been removed.")
+            dismiss()
+        } catch BackendError.http(let status, let message) where status == 409 {
+            await load()
+            errorMessage = "\(message) Review the latest messages, then open Delete conversation again."
         } catch {
             errorMessage = error.localizedDescription
         }

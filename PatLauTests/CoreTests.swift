@@ -860,6 +860,38 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(SupportWebsiteRoute.image, "/api/support/image")
     }
 
+    func testSupportConversationDeletionIncludesConfirmationVersion() throws {
+        let conversation = DynamicRecord(values: [
+            "id": .string("7cda7535-f22d-405e-a996-12f9c30db44d"),
+            "updated_at": .string("2026-07-26T01:15:30.123456+00:00")
+        ])
+
+        let request = try XCTUnwrap(
+            SupportConversationDeletionRequest(conversation: conversation)
+        )
+
+        XCTAssertEqual(request.body.text("action"), "delete_conversation")
+        XCTAssertEqual(request.body.text("conversationId"), conversation.id)
+        XCTAssertEqual(
+            request.body.text("expectedUpdatedAt"),
+            "2026-07-26T01:15:30.123456+00:00"
+        )
+    }
+
+    func testSupportConversationDeletionRequiresVersionedUUID() {
+        XCTAssertNil(SupportConversationDeletionRequest(
+            conversation: DynamicRecord(values: [
+                "id": .string("not-a-conversation"),
+                "updated_at": .string("2026-07-26T01:15:30Z")
+            ])
+        ))
+        XCTAssertNil(SupportConversationDeletionRequest(
+            conversation: DynamicRecord(values: [
+                "id": .string("7cda7535-f22d-405e-a996-12f9c30db44d")
+            ])
+        ))
+    }
+
     func testSupportConversationUniversalLinkUsesProductionHostAndUUID() {
         let id = "7cda7535-f22d-405e-a996-12f9c30db44d"
         let link = SupportConversationDeepLink.parse(
