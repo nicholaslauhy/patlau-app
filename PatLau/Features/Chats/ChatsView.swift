@@ -952,6 +952,14 @@ private enum SupportConversationConfirmation: Identifiable {
     }
 }
 
+private struct ConversationTopOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct ConversationView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
@@ -965,9 +973,12 @@ private struct ConversationView: View {
     @State private var busy = false
     @State private var errorMessage: String?
     @State private var confirmation: SupportConversationConfirmation?
+    @State private var isNearConversationTop = true
     @FocusState private var replyFieldFocused: Bool
 
     private let topAnchorID = "conversation-top"
+    private let bottomAnchorID = "conversation-bottom"
+    private let scrollCoordinateSpace = "conversation-scroll"
 
     private var activeConversation: DynamicRecord { details ?? conversation }
     private var contact: JSONObject { activeConversation.values["contact"]?.object ?? [:] }
@@ -990,55 +1001,75 @@ private struct ConversationView: View {
             ScrollViewReader { proxy in
                 ZStack(alignment: .bottomTrailing) {
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            conversationHeader
-                                .id(topAnchorID)
-                            conversationActions
-
-                            HStack {
-                                Text("\(messages.count) message\(messages.count == 1 ? "" : "s")")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(Theme.secondaryText)
-                                Spacer()
-                                DataRefreshButton(scope: "conversation messages") {
-                                    await load()
-                                }
-                            }
-
-                            if blocked {
-                                Label(
-                                    "This Telegram contact is blocked. Replies cannot be sent.",
-                                    systemImage: "hand.raised.fill"
+                        VStack(spacing: 0) {
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: ConversationTopOffsetPreferenceKey.self,
+                                    value: geometry.frame(
+                                        in: .named(scrollCoordinateSpace)
+                                    ).minY
                                 )
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Theme.red)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .appCard()
                             }
+                            .frame(height: 0)
+                            .id(topAnchorID)
 
-                            if messages.isEmpty && !loading {
-                                EmptyState(
-                                    icon: "bubble.left",
-                                    title: "No messages yet",
-                                    message: "The Telegram history will appear here."
-                                )
-                            } else {
-                                ForEach(Array(messages.enumerated()), id: \.element.id) {
-                                    index, message in
-                                    if let handoff = handoffMarker(before: index, message: message) {
-                                        SupportHandoffMarker(kind: handoff)
+                            LazyVStack(alignment: .leading, spacing: 14) {
+                                conversationHeader
+                                conversationActions
+
+                                HStack {
+                                    Text("\(messages.count) message\(messages.count == 1 ? "" : "s")")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(Theme.secondaryText)
+                                    Spacer()
+                                    DataRefreshButton(scope: "conversation messages") {
+                                        await load()
                                     }
-                                    MessageBubble(
-                                        message: message,
-                                        parentName: supportContactName(activeConversation)
+                                }
+
+                                if blocked {
+                                    Label(
+                                        "This Telegram contact is blocked. Replies cannot be sent.",
+                                        systemImage: "hand.raised.fill"
                                     )
-                                    .id(message.id)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.red)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .appCard()
+                                }
+
+                                if messages.isEmpty && !loading {
+                                    EmptyState(
+                                        icon: "bubble.left",
+                                        title: "No messages yet",
+                                        message: "The Telegram history will appear here."
+                                    )
+                                } else {
+                                    ForEach(Array(messages.enumerated()), id: \.element.id) {
+                                        index, message in
+                                        if let handoff = handoffMarker(before: index, message: message) {
+                                            SupportHandoffMarker(kind: handoff)
+                                        }
+                                        MessageBubble(
+                                            message: message,
+                                            parentName: supportContactName(activeConversation)
+                                        )
+                                        .id(message.id)
+                                    }
                                 }
                             }
+                            .padding(.horizontal, 18)
+                            .padding(.top, 16)
+
+                            Color.clear
+                                .frame(height: 1)
+                                .id(bottomAnchorID)
                         }
-                        .padding(.horizontal, 18)
-                        .padding(.top, 16)
                         .padding(.bottom, 70)
+                    }
+                    .coordinateSpace(name: scrollCoordinateSpace)
+                    .onPreferenceChange(ConversationTopOffsetPreferenceKey.self) {
+                        isNearConversationTop = $0 >= -44
                     }
                     .scrollDismissesKeyboard(.interactively)
                     .simultaneousGesture(
@@ -1053,10 +1084,16 @@ private struct ConversationView: View {
                     Button {
                         replyFieldFocused = false
                         withAnimation(.easeInOut(duration: 0.25)) {
-                            proxy.scrollTo(topAnchorID, anchor: .top)
+                            proxy.scrollTo(
+                                isNearConversationTop ? bottomAnchorID : topAnchorID,
+                                anchor: isNearConversationTop ? .bottom : .top
+                            )
                         }
                     } label: {
-                        Label("Top", systemImage: "arrow.up")
+                        Label(
+                            isNearConversationTop ? "Bottom" : "Top",
+                            systemImage: isNearConversationTop ? "arrow.down" : "arrow.up"
+                        )
                             .font(.caption.weight(.bold))
                             .foregroundStyle(Theme.blue)
                             .padding(.horizontal, 12)
@@ -1071,7 +1108,11 @@ private struct ConversationView: View {
                     .shadow(color: Color.black.opacity(0.10), radius: 8, y: 3)
                     .padding(.trailing, 18)
                     .padding(.bottom, 14)
-                    .accessibilityLabel("Return to top of conversation")
+                    .accessibilityLabel(
+                        isNearConversationTop
+                            ? "Scroll to bottom of conversation"
+                            : "Return to top of conversation"
+                    )
 
                     Color.clear
                         .frame(width: 0, height: 0)
