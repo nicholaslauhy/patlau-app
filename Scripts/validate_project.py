@@ -23,6 +23,11 @@ required_link_markers = {
     "case supportConversation(String)": "native conversation navigation route",
     'static let image = "/api/support/image"': "protected parent-image endpoint",
     '"expectedParentMessageId"': "latest-parent reply safety token",
+    '"reply_preview"': "Telegram reply-context preview",
+    '"telegram_receipt_status"': "Telegram delivery receipt presentation",
+    ".fullScreenCover": "full-size parent-image viewer",
+    "SupportZoomableImageView": "zoomable parent-image viewer",
+    "Close full-size parent image": "visible full-size image close control",
     '"delete_conversation"': "parent conversation deletion action",
     '"expectedUpdatedAt"': "versioned parent-conversation deletion",
 }

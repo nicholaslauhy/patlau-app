@@ -11,6 +11,26 @@ enum SupportWebsiteRoute {
     static let image = "/api/support/image"
 }
 
+enum SupportImageViewerConfiguration {
+    static let maximumZoomMultiplier: CGFloat = 6
+    static let doubleTapZoomMultiplier: CGFloat = 2.5
+}
+
+struct SupportConversationReplyRequest {
+    let conversationID: String
+    let content: String
+    let expectedParentMessageID: String
+
+    var body: JSONObject {
+        [
+            "action": .string("send_message"),
+            "conversationId": .string(conversationID),
+            "content": .string(content),
+            "expectedParentMessageId": .string(expectedParentMessageID)
+        ]
+    }
+}
+
 struct SupportConversationDeletionRequest {
     let conversationID: String
     let expectedUpdatedAt: String
@@ -34,6 +54,115 @@ struct SupportConversationDeletionRequest {
             "conversationId": .string(conversationID),
             "expectedUpdatedAt": .string(expectedUpdatedAt)
         ]
+    }
+}
+
+struct SupportMessageReplyPreview: Equatable {
+    let messageID: String
+    let senderType: String
+    let text: String
+    let hasImage: Bool
+
+    init?(message: DynamicRecord) {
+        guard let preview = message.values["reply_preview"]?.object else {
+            return nil
+        }
+        let messageID = preview.text("message_id")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let numericID = Int(messageID), numericID > 0 else {
+            return nil
+        }
+
+        self.messageID = messageID
+        senderType = preview.text("sender_type")
+        hasImage = preview.flag("has_image")
+
+        let rawText = preview.text("text")
+        let displayText = senderType == "parent"
+            ? rawText
+            : normaliseSupportCoachReferences(rawText)
+        text = displayText
+            .replacingOccurrences(
+                of: #"^\[Photo\]\s*"#,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
+            .replacingOccurrences(
+                of: #"\s+"#,
+                with: " ",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func senderLabel(parentName: String) -> String {
+        switch senderType {
+        case "parent": parentName
+        case "superuser": "Coach Patrick"
+        case "ai": "AI assistant"
+        default: "System update"
+        }
+    }
+
+    var accessibilitySummary: String {
+        if !text.isEmpty { return text }
+        return hasImage ? "Photo" : "Message unavailable"
+    }
+}
+
+struct SupportTelegramReceipt: Equatable {
+    enum Status: String {
+        case sending
+        case sent
+        case parentReplied = "parent_replied"
+        case failed
+    }
+
+    let status: Status
+    let deliveryStatus: String
+    let activityAt: String
+
+    init?(message: DynamicRecord) {
+        guard message.values.text("direction") == "outbound" else {
+            return nil
+        }
+        guard let status = Status(
+            rawValue: message.values.text("telegram_receipt_status")
+        ) else {
+            return nil
+        }
+        self.status = status
+        deliveryStatus = message.values.text("telegram_delivery_status")
+            .lowercased()
+        activityAt = message.values.text("telegram_receipt_at")
+    }
+
+    var symbol: String {
+        switch status {
+        case .sending: "…"
+        case .sent: "✓"
+        case .parentReplied: "✓✓"
+        case .failed: "!"
+        }
+    }
+
+    var details: String {
+        switch status {
+        case .sending:
+            return "The message is waiting to be sent to Telegram."
+        case .sent:
+            return "Telegram accepted the message. Telegram does not expose whether the parent has passively read it."
+        case .parentReplied:
+            if !activityAt.isEmpty {
+                return "The parent sent a later message at \(appDateTime(activityAt)). Telegram does not expose passive read receipts to bots."
+            }
+            return "The parent sent a later message. Telegram does not expose passive read receipts to bots."
+        case .failed:
+            if deliveryStatus == "blocked" {
+                return "Telegram could not deliver this because the parent blocked the bot."
+            }
+            return "Telegram did not confirm that this message was sent."
+        }
     }
 }
 
@@ -118,10 +247,7 @@ private func flattenSupportConversation(_ object: JSONObject) -> DynamicRecord {
 }
 
 private func appDateTime(_ value: String) -> String {
-    let fractional = ISO8601DateFormatter()
-    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    guard let date = fractional.date(from: value)
-            ?? ISO8601DateFormatter().date(from: value) else { return value }
+    guard let date = supportDate(from: value) else { return value }
     return date.formatted(
         .dateTime
             .day()
@@ -130,6 +256,13 @@ private func appDateTime(_ value: String) -> String {
             .hour()
             .minute()
     )
+}
+
+private func supportDate(from value: String) -> Date? {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractional.date(from: value)
+        ?? ISO8601DateFormatter().date(from: value)
 }
 
 enum SupportConversationPolicy {
@@ -1027,6 +1160,7 @@ private struct ConversationView: View {
     @State private var errorMessage: String?
     @State private var confirmation: SupportConversationConfirmation?
     @State private var pendingDeletionRequest: SupportConversationDeletionRequest?
+    @State private var highlightedMessageID: String?
     @FocusState private var replyFieldFocused: Bool
 
     private var activeConversation: DynamicRecord { details ?? conversation }
@@ -1094,8 +1228,25 @@ private struct ConversationView: View {
                                         }
                                         MessageBubble(
                                             message: message,
-                                            parentName: supportContactName(activeConversation)
-                                        )
+                                            parentName: supportContactName(activeConversation),
+                                            highlighted: highlightedMessageID == message.id
+                                        ) { messageID in
+                                            replyFieldFocused = false
+                                            highlightedMessageID = messageID
+                                            withAnimation(.easeInOut(duration: 0.25)) {
+                                                proxy.scrollTo(messageID, anchor: .center)
+                                            }
+                                            Task {
+                                                try? await Task.sleep(for: .seconds(1.5))
+                                                guard !Task.isCancelled,
+                                                      highlightedMessageID == messageID else {
+                                                    return
+                                                }
+                                                withAnimation {
+                                                    highlightedMessageID = nil
+                                                }
+                                            }
+                                        }
                                         .id(message.id)
                                     }
                                 }
@@ -1170,7 +1321,7 @@ private struct ConversationView: View {
         .background(Theme.background)
         .navigationTitle(supportContactName(activeConversation))
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .task(id: conversation.id) { await loadAndPoll() }
         .overlay {
             if loading {
                 LoadingOverlay(text: "Loading messages")
@@ -1487,7 +1638,20 @@ private struct ConversationView: View {
         .background(.bar)
     }
 
-    private func load() async {
+    private func loadAndPoll() async {
+        await load()
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .seconds(10))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await load(reportsErrors: false)
+        }
+    }
+
+    private func load(reportsErrors: Bool = true) async {
         loading = messages.isEmpty
         defer { loading = false }
         do {
@@ -1501,7 +1665,10 @@ private struct ConversationView: View {
                 .compactMap(\.object)
                 .map(DynamicRecord.init) ?? []
         } catch {
-            errorMessage = error.localizedDescription
+            guard !error.isExpectedCancellation else { return }
+            if reportsErrors {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -1516,15 +1683,15 @@ private struct ConversationView: View {
         busy = true
         defer { busy = false }
         do {
+            let request = SupportConversationReplyRequest(
+                conversationID: conversation.id,
+                content: text,
+                expectedParentMessageID: latestParentMessageID
+            )
             _ = try await BackendClient.shared.websiteJSON(
                 path: SupportWebsiteRoute.summary,
                 method: "POST",
-                body: [
-                    "action": .string("send_message"),
-                    "conversationId": .string(conversation.id),
-                    "content": .string(text),
-                    "expectedParentMessageId": .string(latestParentMessageID)
-                ]
+                body: request.body
             )
             reply = ""
             replyFieldFocused = false
@@ -1672,19 +1839,25 @@ private struct SupportHandoffMarker: View {
     }
 }
 
-private func supportDisplayMessageContent(_ message: DynamicRecord) -> String {
-    let content = message.values.text("content")
-    guard message.values.text("sender_type") != "parent" else { return content }
-    return content.replacingOccurrences(
+private func normaliseSupportCoachReferences(_ content: String) -> String {
+    content.replacingOccurrences(
         of: #"Coach\s+Nicholas"#,
         with: "Coach Patrick",
         options: [.regularExpression, .caseInsensitive]
     )
 }
 
+private func supportDisplayMessageContent(_ message: DynamicRecord) -> String {
+    let content = message.values.text("content")
+    guard message.values.text("sender_type") != "parent" else { return content }
+    return normaliseSupportCoachReferences(content)
+}
+
 private struct MessageBubble: View {
     let message: DynamicRecord
     let parentName: String
+    let highlighted: Bool
+    let onOpenReply: (String) -> Void
 
     private var outbound: Bool {
         let sender = message.values.text("sender_type")
@@ -1727,6 +1900,17 @@ private struct MessageBubble: View {
                         .font(.caption2)
                         .opacity(0.8)
                 }
+
+                if let preview = SupportMessageReplyPreview(message: message) {
+                    SupportReplyPreviewView(
+                        preview: preview,
+                        parentName: parentName,
+                        outbound: outbound
+                    ) {
+                        onOpenReply(preview.messageID)
+                    }
+                }
+
                 Text(supportDisplayMessageContent(message))
                     .font(.body)
                     .textSelection(.enabled)
@@ -1741,6 +1925,10 @@ private struct MessageBubble: View {
                         .font(.caption2)
                         .opacity(0.8)
                 }
+
+                if let receipt = SupportTelegramReceipt(message: message) {
+                    SupportTelegramReceiptView(receipt: receipt)
+                }
             }
             .foregroundStyle(outbound ? Color.white : Theme.ink)
             .padding(12)
@@ -1748,8 +1936,98 @@ private struct MessageBubble: View {
                 outbound ? Theme.teal : Color(uiColor: .systemGray5),
                 in: RoundedRectangle(cornerRadius: 15, style: .continuous)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(
+                        highlighted
+                            ? (outbound ? Color.white : Theme.blue)
+                            : Color.clear,
+                        lineWidth: 3
+                    )
+            )
+            .shadow(
+                color: highlighted ? Theme.blue.opacity(0.22) : .clear,
+                radius: highlighted ? 9 : 0,
+                y: highlighted ? 3 : 0
+            )
             if !outbound { Spacer(minLength: 42) }
         }
+        .animation(.easeInOut(duration: 0.2), value: highlighted)
+    }
+}
+
+private struct SupportReplyPreviewView: View {
+    let preview: SupportMessageReplyPreview
+    let parentName: String
+    let outbound: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Rectangle()
+                    .fill(outbound ? Color.white.opacity(0.9) : Theme.blue)
+                    .frame(width: 3)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(preview.senderLabel(parentName: parentName))
+                        .font(.caption2.weight(.bold))
+                    HStack(spacing: 5) {
+                        if preview.hasImage {
+                            Label("Photo", systemImage: "photo")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        if !preview.text.isEmpty {
+                            Text(preview.text)
+                                .lineLimit(2)
+                        } else if !preview.hasImage {
+                            Text("Message unavailable")
+                                .italic()
+                        }
+                    }
+                    .font(.caption2)
+                    .opacity(0.85)
+                }
+
+                Spacer(minLength: 4)
+                Image(systemName: "arrow.up.left")
+                    .font(.caption2.weight(.bold))
+                    .opacity(0.75)
+            }
+            .foregroundStyle(outbound ? Color.white : Theme.ink)
+            .padding(9)
+            .background(
+                outbound ? Color.white.opacity(0.13) : Theme.blue.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            "Go to \(preview.senderLabel(parentName: parentName))'s original message: \(preview.accessibilitySummary)"
+        )
+    }
+}
+
+private struct SupportTelegramReceiptView: View {
+    let receipt: SupportTelegramReceipt
+
+    private var color: Color {
+        switch receipt.status {
+        case .parentReplied: Color.mint
+        case .failed: Color.yellow
+        case .sending, .sent: Color.white.opacity(0.82)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Spacer(minLength: 0)
+            Text(receipt.symbol)
+                .font(.caption2.monospaced().weight(.black))
+        }
+        .foregroundStyle(color)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(receipt.details)
     }
 }
 
@@ -1793,27 +2071,49 @@ private struct SupportParentImagePreview: View {
                 .padding(.vertical, 8)
             case .ready:
                 if let image {
-                    Button {
-                        showsFullSize = true
-                    } label: {
-                        VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            showsFullSize = true
+                        } label: {
                             Image(uiImage: image)
                                 .resizable()
                                 .scaledToFit()
                                 .frame(maxWidth: 300, maxHeight: 260)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                            Label("Open full size", systemImage: "arrow.up.left.and.arrow.down.right")
-                                .font(.caption.weight(.semibold))
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open parent image at full size")
+
+                        HStack(spacing: 16) {
+                            Button {
+                                showsFullSize = true
+                            } label: {
+                                Label(
+                                    "Open full size",
+                                    systemImage: "arrow.up.left.and.arrow.down.right"
+                                )
+                            }
+                            Button {
+                                closeImage()
+                            } label: {
+                                Label("Close image", systemImage: "xmark")
+                            }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             case .failed:
                 VStack(alignment: .leading, spacing: 7) {
                     Text("Could not load this parent image.")
                         .font(.caption.weight(.semibold))
-                    Button("Try Again") {
-                        Task { await loadImage() }
+                    HStack(spacing: 16) {
+                        Button("Try Again") {
+                            Task { await loadImage() }
+                        }
+                        Button("Close image") {
+                            closeImage()
+                        }
                     }
                     .font(.caption.weight(.bold))
                     .buttonStyle(.plain)
@@ -1821,26 +2121,23 @@ private struct SupportParentImagePreview: View {
                 .padding(.vertical, 6)
             }
         }
-        .sheet(isPresented: $showsFullSize) {
-            NavigationStack {
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    if let image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .padding(12)
-                    }
+        .fullScreenCover(isPresented: $showsFullSize) {
+            if let image {
+                SupportFullScreenImageViewer(image: image) {
+                    showsFullSize = false
                 }
-                .navigationTitle("Parent Image")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Close") { showsFullSize = false }
-                    }
-                }
+            } else {
+                Color.black
+                    .ignoresSafeArea()
+                    .onAppear { showsFullSize = false }
             }
         }
+    }
+
+    private func closeImage() {
+        showsFullSize = false
+        image = nil
+        loadState = .idle
     }
 
     @MainActor
@@ -1860,6 +2157,191 @@ private struct SupportParentImagePreview: View {
             image = nil
             loadState = .failed
         }
+    }
+}
+
+private struct SupportFullScreenImageViewer: View {
+    let image: UIImage
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+
+            SupportZoomableImageView(image: image)
+                .ignoresSafeArea()
+                .accessibilityLabel("Parent image")
+
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("Parent Image")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .background(.ultraThinMaterial, in: Capsule())
+
+                    Spacer(minLength: 12)
+
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 48, height: 48)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(
+                                Circle()
+                                    .stroke(Color.white.opacity(0.35), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close full-size parent image")
+                }
+
+                Spacer()
+
+                Text("Pinch or double-tap to zoom • Drag to move")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 38)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .safeAreaPadding(.horizontal, 16)
+            .safeAreaPadding(.top, 8)
+            .safeAreaPadding(.bottom, 10)
+        }
+    }
+}
+
+private struct SupportZoomableImageView: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> SupportImageScrollView {
+        SupportImageScrollView(image: image)
+    }
+
+    func updateUIView(
+        _ scrollView: SupportImageScrollView,
+        context: Context
+    ) {
+        scrollView.setImage(image)
+    }
+}
+
+private final class SupportImageScrollView: UIScrollView, UIScrollViewDelegate {
+    private let zoomingImageView = UIImageView()
+    private var lastLayoutSize: CGSize = .zero
+
+    init(image: UIImage) {
+        super.init(frame: .zero)
+        delegate = self
+        backgroundColor = .black
+        bouncesZoom = true
+        alwaysBounceHorizontal = false
+        alwaysBounceVertical = false
+        showsHorizontalScrollIndicator = true
+        showsVerticalScrollIndicator = true
+        decelerationRate = .fast
+
+        zoomingImageView.contentMode = .scaleAspectFit
+        zoomingImageView.isUserInteractionEnabled = true
+        addSubview(zoomingImageView)
+        setImage(image)
+
+        let doubleTap = UITapGestureRecognizer(
+            target: self,
+            action: #selector(handleDoubleTap(_:))
+        )
+        doubleTap.numberOfTapsRequired = 2
+        zoomingImageView.addGestureRecognizer(doubleTap)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setImage(_ image: UIImage) {
+        guard zoomingImageView.image !== image else { return }
+        zoomingImageView.image = image
+        lastLayoutSize = .zero
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0,
+              bounds.height > 0,
+              let image = zoomingImageView.image,
+              image.size.width > 0,
+              image.size.height > 0 else {
+            return
+        }
+
+        if lastLayoutSize != bounds.size {
+            lastLayoutSize = bounds.size
+            zoomingImageView.frame = CGRect(origin: .zero, size: image.size)
+            contentSize = image.size
+
+            let widthScale = bounds.width / image.size.width
+            let heightScale = bounds.height / image.size.height
+            let minimumScale = min(widthScale, heightScale)
+            minimumZoomScale = minimumScale
+            maximumZoomScale = max(
+                minimumScale
+                    * SupportImageViewerConfiguration.maximumZoomMultiplier,
+                1
+            )
+            setZoomScale(minimumScale, animated: false)
+        }
+
+        centreImage()
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+        zoomingImageView
+    }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+        centreImage()
+    }
+
+    private func centreImage() {
+        let horizontalInset = max(0, (bounds.width - contentSize.width) / 2)
+        let verticalInset = max(0, (bounds.height - contentSize.height) / 2)
+        contentInset = UIEdgeInsets(
+            top: verticalInset,
+            left: horizontalInset,
+            bottom: verticalInset,
+            right: horizontalInset
+        )
+    }
+
+    @objc
+    private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        let restingScale = minimumZoomScale
+        if zoomScale > restingScale * 1.05 {
+            setZoomScale(restingScale, animated: true)
+            return
+        }
+
+        let targetScale = min(
+            restingScale
+                * SupportImageViewerConfiguration.doubleTapZoomMultiplier,
+            maximumZoomScale
+        )
+        let tapPoint = gesture.location(in: zoomingImageView)
+        let zoomWidth = bounds.width / targetScale
+        let zoomHeight = bounds.height / targetScale
+        let zoomRect = CGRect(
+            x: tapPoint.x - zoomWidth / 2,
+            y: tapPoint.y - zoomHeight / 2,
+            width: zoomWidth,
+            height: zoomHeight
+        )
+        zoom(to: zoomRect, animated: true)
     }
 }
 

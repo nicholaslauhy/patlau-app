@@ -860,6 +860,17 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(SupportWebsiteRoute.image, "/api/support/image")
     }
 
+    func testSupportImageViewerAllowsUsefulZoomLevels() {
+        XCTAssertEqual(
+            SupportImageViewerConfiguration.maximumZoomMultiplier,
+            6
+        )
+        XCTAssertEqual(
+            SupportImageViewerConfiguration.doubleTapZoomMultiplier,
+            2.5
+        )
+    }
+
     func testSupportConversationExposesTopAndBottomScrollControls() {
         XCTAssertEqual(
             SupportConversationScrollDestination.allCases.map(\.title),
@@ -873,6 +884,80 @@ final class CoreTests: XCTestCase {
             SupportConversationScrollDestination.bottom.accessibilityLabel,
             "Scroll to bottom of conversation"
         )
+    }
+
+    func testSupportReplyRequestUsesWebsiteTelegramContract() {
+        let request = SupportConversationReplyRequest(
+            conversationID: "7cda7535-f22d-405e-a996-12f9c30db44d",
+            content: "I will check this for you.",
+            expectedParentMessageID: "91"
+        )
+
+        XCTAssertEqual(request.body.text("action"), "send_message")
+        XCTAssertEqual(
+            request.body.text("conversationId"),
+            "7cda7535-f22d-405e-a996-12f9c30db44d"
+        )
+        XCTAssertEqual(
+            request.body.text("content"),
+            "I will check this for you."
+        )
+        XCTAssertEqual(request.body.text("expectedParentMessageId"), "91")
+    }
+
+    func testSupportReplyPreviewPreservesQuotedMessageContext() throws {
+        let message = DynamicRecord(values: [
+            "id": .number(92),
+            "reply_preview": .object([
+                "message_id": .number(91),
+                "sender_type": .string("ai"),
+                "text": .string("[Photo]\nCoach Nicholas will review this."),
+                "has_image": .bool(true)
+            ])
+        ])
+
+        let preview = try XCTUnwrap(
+            SupportMessageReplyPreview(message: message)
+        )
+
+        XCTAssertEqual(preview.messageID, "91")
+        XCTAssertEqual(preview.senderLabel(parentName: "Brendan"), "AI assistant")
+        XCTAssertEqual(preview.text, "Coach Patrick will review this.")
+        XCTAssertTrue(preview.hasImage)
+        XCTAssertEqual(preview.accessibilitySummary, preview.text)
+    }
+
+    func testSupportTelegramReceiptsMatchWebsiteSemantics() throws {
+        let sent = try XCTUnwrap(SupportTelegramReceipt(
+            message: DynamicRecord(values: [
+                "id": .number(92),
+                "direction": .string("outbound"),
+                "telegram_delivery_status": .string("sent"),
+                "telegram_receipt_status": .string("sent")
+            ])
+        ))
+        XCTAssertEqual(sent.symbol, "✓")
+        XCTAssertTrue(sent.details.contains("does not expose"))
+
+        let replied = try XCTUnwrap(SupportTelegramReceipt(
+            message: DynamicRecord(values: [
+                "id": .number(93),
+                "direction": .string("outbound"),
+                "telegram_delivery_status": .string("sent"),
+                "telegram_receipt_status": .string("parent_replied"),
+                "telegram_receipt_at": .string("2026-07-28T08:05:00Z")
+            ])
+        ))
+        XCTAssertEqual(replied.symbol, "✓✓")
+        XCTAssertTrue(replied.details.contains("later message"))
+
+        XCTAssertNil(SupportTelegramReceipt(
+            message: DynamicRecord(values: [
+                "id": .number(94),
+                "direction": .string("inbound"),
+                "telegram_receipt_status": .string("sent")
+            ])
+        ))
     }
 
     func testSupportConversationDeletionIncludesConfirmationVersion() throws {
