@@ -146,6 +146,19 @@ struct SupportTelegramReceipt: Equatable {
         }
     }
 
+    var displayLabel: String {
+        switch status {
+        case .sending:
+            return "Sending"
+        case .sent:
+            return "Sent"
+        case .parentReplied:
+            return "Received"
+        case .failed:
+            return "Failed"
+        }
+    }
+
     var details: String {
         switch status {
         case .sending:
@@ -2024,6 +2037,8 @@ private struct SupportTelegramReceiptView: View {
             Spacer(minLength: 0)
             Text(receipt.symbol)
                 .font(.caption2.monospaced().weight(.black))
+            Text(receipt.displayLabel)
+                .font(.caption2.weight(.semibold))
         }
         .foregroundStyle(color)
         .accessibilityElement(children: .ignore)

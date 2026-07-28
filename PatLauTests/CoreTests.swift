@@ -937,6 +937,7 @@ final class CoreTests: XCTestCase {
             ])
         ))
         XCTAssertEqual(sent.symbol, "✓")
+        XCTAssertEqual(sent.displayLabel, "Sent")
         XCTAssertTrue(sent.details.contains("does not expose"))
 
         let replied = try XCTUnwrap(SupportTelegramReceipt(
@@ -949,6 +950,7 @@ final class CoreTests: XCTestCase {
             ])
         ))
         XCTAssertEqual(replied.symbol, "✓✓")
+        XCTAssertEqual(replied.displayLabel, "Received")
         XCTAssertTrue(replied.details.contains("later message"))
 
         XCTAssertNil(SupportTelegramReceipt(
