@@ -278,6 +278,20 @@ private func supportDate(from value: String) -> Date? {
         ?? ISO8601DateFormatter().date(from: value)
 }
 
+func supportTimelineMessages(from value: JSONValue?) -> [DynamicRecord] {
+    value?.array?
+        .compactMap(\.object)
+        .map(DynamicRecord.init) ?? []
+}
+
+func supportConversationIsClosed(_ status: String) -> Bool {
+    ["resolved", "closed_parent"].contains(status)
+}
+
+func supportNewMessageIndicatorTitle(count: Int) -> String {
+    "\(count) new message" + (count == 1 ? " below" : "s below")
+}
+
 enum SupportConversationPolicy {
     static let parentReopenedMessage = "Conversation reopened. Please type and send your question below."
     static let coachReopenedMessage = "Coach Patrick reopened this conversation to send a follow-up."
@@ -1159,6 +1173,14 @@ enum SupportConversationScrollDestination: String, CaseIterable, Identifiable {
     }
 }
 
+private struct SupportConversationBottomPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 private struct ConversationView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
@@ -1174,6 +1196,8 @@ private struct ConversationView: View {
     @State private var confirmation: SupportConversationConfirmation?
     @State private var pendingDeletionRequest: SupportConversationDeletionRequest?
     @State private var highlightedMessageID: String?
+    @State private var isNearConversationBottom = true
+    @State private var newMessagesBelowCount = 0
     @FocusState private var replyFieldFocused: Bool
 
     private var activeConversation: DynamicRecord { details ?? conversation }
@@ -1183,7 +1207,7 @@ private struct ConversationView: View {
         activeConversation.values.flag("contact_blocked") || contact.flag("blocked")
     }
     private var isClosed: Bool {
-        ["resolved", "closed_parent"].contains(status)
+        supportConversationIsClosed(status)
     }
     private var canClose: Bool {
         status == "human_active" && SupportConversationPolicy.canClose(messages: messages)
@@ -1191,134 +1215,205 @@ private struct ConversationView: View {
     private var latestParentMessageID: String {
         messages.last(where: { $0.values.text("sender_type") == "parent" })?.id ?? ""
     }
+    private var newMessageIndicatorTitle: String {
+        supportNewMessageIndicatorTitle(count: newMessagesBelowCount)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ZStack(alignment: .bottomTrailing) {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            Color.clear
-                                .frame(height: 1)
-                                .id(SupportConversationScrollDestination.top.id)
+                    GeometryReader { viewport in
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id(SupportConversationScrollDestination.top.id)
 
-                            LazyVStack(alignment: .leading, spacing: 14) {
-                                conversationHeader
-                                conversationActions
+                                LazyVStack(alignment: .leading, spacing: 14) {
+                                    conversationHeader
+                                    conversationActions
 
-                                HStack {
-                                    Text("\(messages.count) message\(messages.count == 1 ? "" : "s")")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(Theme.secondaryText)
-                                    Spacer()
-                                    DataRefreshButton(scope: "conversation messages") {
-                                        await load()
+                                    HStack {
+                                        Text("\(messages.count) message\(messages.count == 1 ? "" : "s")")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(Theme.secondaryText)
+                                        Spacer()
+                                        DataRefreshButton(scope: "conversation messages") {
+                                            await load()
+                                        }
+                                    }
+
+                                    if blocked {
+                                        Label(
+                                            "This Telegram contact is blocked. Replies cannot be sent.",
+                                            systemImage: "hand.raised.fill"
+                                        )
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(Theme.red)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .appCard()
+                                    }
+
+                                    if messages.isEmpty && !loading {
+                                        EmptyState(
+                                            icon: "bubble.left",
+                                            title: "No messages yet",
+                                            message: "The Telegram history will appear here."
+                                        )
+                                    } else {
+                                        ForEach(Array(messages.enumerated()), id: \.element.id) {
+                                            index, message in
+                                            if let handoff = handoffMarker(before: index, message: message) {
+                                                SupportHandoffMarker(kind: handoff)
+                                            }
+                                            MessageBubble(
+                                                message: message,
+                                                parentName: supportContactName(activeConversation),
+                                                highlighted: highlightedMessageID == message.id
+                                            ) { messageID in
+                                                replyFieldFocused = false
+                                                highlightedMessageID = messageID
+                                                withAnimation(.easeInOut(duration: 0.25)) {
+                                                    proxy.scrollTo(messageID, anchor: .center)
+                                                }
+                                                Task {
+                                                    try? await Task.sleep(for: .seconds(1.5))
+                                                    guard !Task.isCancelled,
+                                                          highlightedMessageID == messageID else {
+                                                        return
+                                                    }
+                                                    withAnimation {
+                                                        highlightedMessageID = nil
+                                                    }
+                                                }
+                                            }
+                                            .id(message.id)
+                                        }
                                     }
                                 }
+                                .padding(.horizontal, 18)
+                                .padding(.top, 16)
 
-                                if blocked {
-                                    Label(
-                                        "This Telegram contact is blocked. Replies cannot be sent.",
-                                        systemImage: "hand.raised.fill"
-                                    )
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(Theme.red)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .appCard()
-                                }
-
-                                if messages.isEmpty && !loading {
-                                    EmptyState(
-                                        icon: "bubble.left",
-                                        title: "No messages yet",
-                                        message: "The Telegram history will appear here."
-                                    )
-                                } else {
-                                    ForEach(Array(messages.enumerated()), id: \.element.id) {
-                                        index, message in
-                                        if let handoff = handoffMarker(before: index, message: message) {
-                                            SupportHandoffMarker(kind: handoff)
+                                Color.clear
+                                    .frame(height: 1)
+                                    .id(SupportConversationScrollDestination.bottom.id)
+                                    .background {
+                                        GeometryReader { bottom in
+                                            Color.clear.preference(
+                                                key: SupportConversationBottomPreferenceKey.self,
+                                                value: bottom.frame(
+                                                    in: .named("support-conversation-scroll")
+                                                ).minY
+                                            )
                                         }
-                                        MessageBubble(
-                                            message: message,
-                                            parentName: supportContactName(activeConversation),
-                                            highlighted: highlightedMessageID == message.id
-                                        ) { messageID in
-                                            replyFieldFocused = false
-                                            highlightedMessageID = messageID
-                                            withAnimation(.easeInOut(duration: 0.25)) {
-                                                proxy.scrollTo(messageID, anchor: .center)
-                                            }
-                                            Task {
-                                                try? await Task.sleep(for: .seconds(1.5))
-                                                guard !Task.isCancelled,
-                                                      highlightedMessageID == messageID else {
-                                                    return
-                                                }
-                                                withAnimation {
-                                                    highlightedMessageID = nil
-                                                }
-                                            }
-                                        }
-                                        .id(message.id)
                                     }
-                                }
                             }
-                            .padding(.horizontal, 18)
-                            .padding(.top, 16)
-
-                            Color.clear
-                                .frame(height: 1)
-                                .id(SupportConversationScrollDestination.bottom.id)
+                            .padding(.bottom, 70)
                         }
-                        .padding(.bottom, 70)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 12)
-                            .onChanged { value in
-                                if value.translation.height > 12 {
-                                    replyFieldFocused = false
+                        .coordinateSpace(name: "support-conversation-scroll")
+                        .onPreferenceChange(
+                            SupportConversationBottomPreferenceKey.self
+                        ) { bottomPosition in
+                            updateBottomProximity(
+                                bottomPosition: bottomPosition,
+                                viewportHeight: viewport.size.height
+                            )
+                        }
+                        .scrollDismissesKeyboard(.interactively)
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 12)
+                                .onChanged { value in
+                                    if value.translation.height > 12 {
+                                        replyFieldFocused = false
+                                    }
                                 }
-                            }
-                    )
+                        )
+                    }
 
-                    HStack(spacing: 4) {
-                        ForEach(SupportConversationScrollDestination.allCases) { destination in
+                    VStack(alignment: .trailing, spacing: 8) {
+                        if newMessagesBelowCount > 0 {
                             Button {
                                 replyFieldFocused = false
+                                newMessagesBelowCount = 0
                                 withAnimation(.easeInOut(duration: 0.25)) {
                                     proxy.scrollTo(
-                                        destination.id,
-                                        anchor: destination.anchor
+                                        SupportConversationScrollDestination.bottom.id,
+                                        anchor: .bottom
                                     )
                                 }
                             } label: {
-                                Label(destination.title, systemImage: destination.systemImage)
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(Theme.blue)
-                                    .padding(.horizontal, 10)
-                                    .frame(minHeight: 42)
+                                Label(
+                                    newMessageIndicatorTitle,
+                                    systemImage: "arrow.down.message.fill"
+                                )
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 42)
+                                .background(
+                                    Theme.blue,
+                                    in: Capsule()
+                                )
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel(destination.accessibilityLabel)
+                            .accessibilityLabel(
+                                "\(newMessageIndicatorTitle). Scroll to the newest message."
+                            )
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
+
+                        HStack(spacing: 4) {
+                            ForEach(SupportConversationScrollDestination.allCases) { destination in
+                                Button {
+                                    replyFieldFocused = false
+                                    if destination == .bottom {
+                                        newMessagesBelowCount = 0
+                                    }
+                                    withAnimation(.easeInOut(duration: 0.25)) {
+                                        proxy.scrollTo(
+                                            destination.id,
+                                            anchor: destination.anchor
+                                        )
+                                    }
+                                } label: {
+                                    Label(destination.title, systemImage: destination.systemImage)
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(Theme.blue)
+                                        .padding(.horizontal, 10)
+                                        .frame(minHeight: 42)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(destination.accessibilityLabel)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Theme.border)
+                        )
+                        .shadow(color: Color.black.opacity(0.10), radius: 8, y: 3)
                     }
-                    .padding(.horizontal, 4)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Theme.border)
-                    )
-                    .shadow(color: Color.black.opacity(0.10), radius: 8, y: 3)
                     .padding(.trailing, 18)
                     .padding(.bottom, 14)
+                    .animation(.easeInOut(duration: 0.2), value: newMessagesBelowCount)
 
                     Color.clear
                         .frame(width: 0, height: 0)
-                        .onChange(of: messages.count) { _, _ in
-                            if let last = messages.last {
-                                withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        .onChange(of: messages.count) { previousCount, currentCount in
+                            guard currentCount > previousCount else { return }
+                            let addedCount = currentCount - previousCount
+                            if previousCount == 0 || isNearConversationBottom {
+                                newMessagesBelowCount = 0
+                                withAnimation {
+                                    proxy.scrollTo(
+                                        SupportConversationScrollDestination.bottom.id,
+                                        anchor: .bottom
+                                    )
+                                }
+                            } else {
+                                newMessagesBelowCount += addedCount
                             }
                         }
                 }
@@ -1674,15 +1769,26 @@ private struct ConversationView: View {
             if let object = response.object?["conversation"]?.object {
                 details = flattenSupportConversation(object)
             }
-            messages = response.object?["messages"]?.array?
-                .compactMap(\.object)
-                .map(DynamicRecord.init) ?? []
+            messages = supportTimelineMessages(
+                from: response.object?["messages"]
+            )
         } catch {
             guard !error.isExpectedCancellation else { return }
             if reportsErrors {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func updateBottomProximity(
+        bottomPosition: CGFloat,
+        viewportHeight: CGFloat
+    ) {
+        let isNearBottom = bottomPosition <= viewportHeight + 100
+        if isNearBottom {
+            newMessagesBelowCount = 0
+        }
+        isNearConversationBottom = isNearBottom
     }
 
     private func send() async {

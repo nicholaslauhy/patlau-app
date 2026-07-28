@@ -25,6 +25,8 @@ required_link_markers = {
     '"expectedParentMessageId"': "latest-parent reply safety token",
     '"reply_preview"': "Telegram reply-context preview",
     '"telegram_receipt_status"': "Telegram delivery receipt presentation",
+    "supportTimelineMessages": "unfiltered parent command and system timeline",
+    "newMessagesBelowCount": "new support-message below indicator",
     ".fullScreenCover": "full-size parent-image viewer",
     "SupportZoomableImageView": "zoomable parent-image viewer",
     "Close full-size parent image": "visible full-size image close control",

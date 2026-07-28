@@ -860,6 +860,64 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(SupportWebsiteRoute.image, "/api/support/image")
     }
 
+    func testSupportTimelineKeepsParentCommandsAndSystemMessages() {
+        let value = JSONValue.array([
+            .object([
+                "id": .number(1),
+                "sender_type": .string("parent"),
+                "content": .string("/start")
+            ]),
+            .object([
+                "id": .number(2),
+                "sender_type": .string("parent"),
+                "content": .string("/status")
+            ]),
+            .object([
+                "id": .number(3),
+                "sender_type": .string("parent"),
+                "content": .string("/close")
+            ]),
+            .object([
+                "id": .number(4),
+                "sender_type": .string("system"),
+                "content": .string("This conversation is closed.")
+            ]),
+            .object([
+                "id": .number(5),
+                "sender_type": .string("ai"),
+                "content": .string("How can I help?")
+            ])
+        ])
+
+        let timeline = supportTimelineMessages(from: value)
+
+        XCTAssertEqual(timeline.count, 5)
+        XCTAssertEqual(
+            timeline.map { $0.values.text("content") },
+            [
+                "/start",
+                "/status",
+                "/close",
+                "This conversation is closed.",
+                "How can I help?"
+            ]
+        )
+        XCTAssertTrue(supportConversationIsClosed("closed_parent"))
+        XCTAssertTrue(supportConversationIsClosed("resolved"))
+        XCTAssertFalse(supportConversationIsClosed("ai_active"))
+    }
+
+    func testSupportNewMessageIndicatorUsesSingularAndPluralLabels() {
+        XCTAssertEqual(
+            supportNewMessageIndicatorTitle(count: 1),
+            "1 new message below"
+        )
+        XCTAssertEqual(
+            supportNewMessageIndicatorTitle(count: 3),
+            "3 new messages below"
+        )
+    }
+
     func testSupportImageViewerAllowsUsefulZoomLevels() {
         XCTAssertEqual(
             SupportImageViewerConfiguration.maximumZoomMultiplier,
