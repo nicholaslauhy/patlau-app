@@ -2189,15 +2189,8 @@ private struct SupportFullScreenImageViewer: View {
                 .accessibilityLabel("Parent image")
 
             VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    Text("Parent Image")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .background(.ultraThinMaterial, in: Capsule())
-
-                    Spacer(minLength: 12)
+                HStack {
+                    Spacer()
 
                     Button(action: onClose) {
                         Image(systemName: "xmark")
