@@ -374,6 +374,64 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testAttendanceActionPermissionsRestrictAdminAndMemberToWeekendMakeup() {
+        XCTAssertFalse(
+            AttendanceActionPolicy.canMarkForAnotherDate(
+                role: .member,
+                programme: .weekend
+            )
+        )
+        XCTAssertFalse(
+            AttendanceActionPolicy.canMarkForAnotherDate(
+                role: .admin,
+                programme: .weekend
+            )
+        )
+        XCTAssertTrue(
+            AttendanceActionPolicy.canMarkForAnotherDate(
+                role: .superuser,
+                programme: .weekend
+            )
+        )
+
+        let requestedWeekdayTarget = MakeupTargetSelection(
+            programme: .weekday,
+            dateKey: "2026-07-27",
+            label: "Weekday makeup lesson",
+            targetValue: 80
+        )
+
+        for role in [UserRole.member, .admin] {
+            let target = AttendanceActionPolicy.makeupTarget(
+                role: role,
+                sourceType: "weekend",
+                date: "2026-07-26",
+                requestedTarget: requestedWeekdayTarget
+            )
+            XCTAssertEqual(target?.programme, .weekend)
+            XCTAssertEqual(target?.dateKey, "2026-07-26")
+            XCTAssertEqual(target?.label, "Weekend makeup lesson")
+            XCTAssertNil(
+                AttendanceActionPolicy.makeupTarget(
+                    role: role,
+                    sourceType: "one_to_one",
+                    date: "2026-07-26",
+                    requestedTarget: nil
+                )
+            )
+        }
+
+        XCTAssertEqual(
+            AttendanceActionPolicy.makeupTarget(
+                role: .superuser,
+                sourceType: "weekend",
+                date: "2026-07-26",
+                requestedTarget: requestedWeekdayTarget
+            )?.programme,
+            .weekday
+        )
+    }
+
     func testWeekendSessionReportsGroupCurrentResultByDateAndSession() {
         let students = [
             DynamicRecord(values: [

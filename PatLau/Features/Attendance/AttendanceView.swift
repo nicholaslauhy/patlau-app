@@ -54,6 +54,35 @@ enum HistoricalAttendancePolicy {
     }
 }
 
+enum AttendanceActionPolicy {
+    static func canMarkForAnotherDate(
+        role: UserRole,
+        programme: Programme
+    ) -> Bool {
+        role == .superuser && programme == .weekend
+    }
+
+    static func makeupTarget(
+        role: UserRole,
+        sourceType: String,
+        date: String,
+        requestedTarget: MakeupTargetSelection?
+    ) -> MakeupTargetSelection? {
+        if role == .superuser {
+            return requestedTarget ?? MakeupTargetSelection.defaultTarget(
+                forSourceType: sourceType,
+                date: date
+            )
+        }
+
+        guard sourceType == "weekend" else { return nil }
+        return MakeupTargetSelection.defaultTarget(
+            forSourceType: "weekend",
+            date: date
+        )
+    }
+}
+
 enum WeekdayAttendanceScope: String, CaseIterable, Identifiable {
     case selectedDate = "Selected date"
     case allSchedules = "All scheduled days"
@@ -198,6 +227,10 @@ struct AttendanceView: View {
                 canUndo: canUndo(record),
                 canReset: (programme == .weekend || programme == .matchplay)
                     && state.role == .superuser,
+                canMarkForAnotherDate: AttendanceActionPolicy.canMarkForAnotherDate(
+                    role: state.role,
+                    programme: programme
+                ),
                 canChooseMakeupProgramme: state.role == .superuser,
                 sourceTrainingType: programme.makeupTrainingType,
                 sourceStudentID: record.values.text("student_id", fallback: record.id),
@@ -491,6 +524,17 @@ struct AttendanceView: View {
         _ status: AttendanceStatus,
         attendanceDate: Date? = nil
     ) async -> String? {
+        if attendanceDate != nil,
+           !AttendanceActionPolicy.canMarkForAnotherDate(
+               role: state.role,
+               programme: programme
+           ) {
+            state.show(
+                "Only superusers can record Weekend attendance for another date.",
+                kind: .error
+            )
+            return nil
+        }
         if status == .makeup {
             return await markMakeup(record, target: nil)
         }
@@ -711,10 +755,18 @@ struct AttendanceView: View {
             return nil
         }
 
-        let resolvedTarget = target ?? MakeupTargetSelection.defaultTarget(
-            forSourceType: sourceType,
-            date: targetDate
-        )
+        guard let resolvedTarget = AttendanceActionPolicy.makeupTarget(
+            role: state.role,
+            sourceType: sourceType,
+            date: targetDate,
+            requestedTarget: target
+        ) else {
+            state.show(
+                "Admins and members can apply makeup attendance only from Weekend attendance.",
+                kind: .error
+            )
+            return nil
+        }
 
         do {
             let creditResponse = try await BackendClient.shared.rpc(
@@ -1469,6 +1521,7 @@ private struct AttendanceActionsSheet: View {
     let canMakeup: Bool
     let canUndo: Bool
     let canReset: Bool
+    let canMarkForAnotherDate: Bool
     let canChooseMakeupProgramme: Bool
     let sourceTrainingType: String
     let sourceStudentID: String
@@ -1574,17 +1627,19 @@ private struct AttendanceActionsSheet: View {
                     }
                     .tint(Theme.green)
 
-                    Button {
-                        showHistoricalAttendance = true
-                    } label: {
-                        Label("Mark Attended for Another Date", systemImage: "calendar.badge.checkmark")
-                            .frame(maxWidth: .infinity)
+                    if canMarkForAnotherDate {
+                        Button {
+                            showHistoricalAttendance = true
+                        } label: {
+                            Label("Mark Attended for Another Date", systemImage: "calendar.badge.checkmark")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(AppPrimaryButtonStyle())
+                        .tint(Theme.green)
+                        .disabled(operationMessage != nil)
+                        .touchTarget()
+                        .accessibilityIdentifier("mark-attended-another-date")
                     }
-                    .buttonStyle(AppPrimaryButtonStyle())
-                    .tint(Theme.green)
-                    .disabled(operationMessage != nil)
-                    .touchTarget()
-                    .accessibilityIdentifier("mark-attended-another-date")
 
                     AsyncActionButton(
                         title: "Mark Missed",

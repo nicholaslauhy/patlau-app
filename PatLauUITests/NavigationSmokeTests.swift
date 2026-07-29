@@ -191,7 +191,7 @@ final class NavigationSmokeTests: XCTestCase {
 
     func testAttendanceCanChooseAnEarlierLessonDate() throws {
         let app = launchApp(arguments: [
-            "-uiTestingRole=member",
+            "-uiTestingRole=superuser",
             "-uiTestingAttendanceError"
         ])
 
@@ -218,6 +218,30 @@ final class NavigationSmokeTests: XCTestCase {
             ).firstMatch.exists
         )
         keepScreenshot(of: app, name: "Historical Attendance Date")
+    }
+
+    func testAdminAndMemberCannotChooseHistoricalOrCrossProgrammeMakeup() throws {
+        for role in ["member", "admin"] {
+            let app = launchApp(arguments: [
+                "-uiTestingRole=\(role)",
+                "-uiTestingAttendanceError"
+            ])
+
+            XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+            app.staticTexts["Weekend"].tap()
+            XCTAssertTrue(app.staticTexts["Weekend Attendance"].waitForExistence(timeout: 4))
+            app.staticTexts["Weekend Attendance"].tap()
+
+            let attendanceAction = app.staticTexts["Tap to update attendance"].firstMatch
+            XCTAssertTrue(attendanceAction.waitForExistence(timeout: 5))
+            attendanceAction.tap()
+
+            XCTAssertTrue(app.buttons["Mark Makeup"].waitForExistence(timeout: 4))
+            XCTAssertFalse(app.buttons["mark-attended-another-date"].exists)
+            XCTAssertFalse(app.staticTexts["Choose Makeup Programme"].exists)
+
+            app.terminate()
+        }
     }
 
     func testWeekdayAttendanceCanShowOneDateOrAllScheduledDays() throws {
