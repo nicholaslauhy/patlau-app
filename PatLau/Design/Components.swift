@@ -74,6 +74,7 @@ struct UserAvatarView: View {
     var role: UserRole = .member
     var size: CGFloat = 44
     var revision: UUID? = nil
+    var tint: Color? = nil
 
     var body: some View {
         Group {
@@ -99,13 +100,17 @@ struct UserAvatarView: View {
 
     private var fallback: some View {
         ZStack {
-            Theme.colour(for: role).opacity(0.12)
+            resolvedTint.opacity(0.12)
             Image(systemName: "person.crop.circle.fill")
                 .resizable()
                 .scaledToFit()
                 .padding(size * 0.14)
-                .foregroundStyle(Theme.colour(for: role))
+                .foregroundStyle(resolvedTint)
         }
+    }
+
+    private var resolvedTint: Color {
+        tint ?? Theme.colour(for: role)
     }
 
     private func cacheBusted(_ url: URL) -> URL {

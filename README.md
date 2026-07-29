@@ -21,7 +21,9 @@ The project is validated with its structural checker, Xcode builds, unit tests, 
 
 ## Mobile design
 
-- A native Home, Operations, and Account tab structure with role-aware navigation.
+- A native Home, Workspace, and Account tab structure. Home is a role-aware
+  command centre linked to the website operations summary; Workspace keeps
+  detailed programme, makeup, support, audit, and shortcut tools organised.
 - Programme tiles open a small native directory first. Students, attendance, payments, 1-1 scheduling, makeup, coach polls, chats, and reports use adaptive cards and sheets instead of desktop tables.
 - Password reset stays inside the app and signs the recovered account into the native interface. The shared account avatar immediately reflects profile-photo changes.
 - Quick Access holds up to five role-authorised tools and supports adding, deleting, and drag-to-reorder customisation.

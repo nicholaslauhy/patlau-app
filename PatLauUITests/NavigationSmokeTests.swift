@@ -19,6 +19,73 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertEqual(emailBox.frame.height, passwordBox.frame.height, accuracy: 0.5)
     }
 
+    func testPostLoginHomeIsTheRoleAwareOperationsCommandCentre() {
+        let app = launchApp(arguments: [
+            "-uiTestingRole=superuser",
+            "-uiTestingOperationsSummary"
+        ])
+
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["operations-command-centre"]
+                .firstMatch
+                .exists
+        )
+        XCTAssertTrue(app.staticTexts["COMMAND CENTRE"].exists)
+
+        let attention = app.staticTexts["Needs attention"]
+        XCTAssertTrue(attention.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Escalated chats"].exists)
+        XCTAssertTrue(app.staticTexts["Unread messages"].exists)
+
+        let portfolio = app.staticTexts["Programme portfolio"]
+        for _ in 0..<4 where !portfolio.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(portfolio.exists)
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["Weekend"], in: app))
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["Weekday"], in: app))
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["MatchPlay"], in: app))
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["1-1"], in: app))
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'Dashboard'")
+            ).firstMatch.exists
+        )
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'Session Reports'")
+            ).firstMatch.exists
+        )
+        XCTAssertGreaterThan(
+            portfolio.frame.minY,
+            attention.frame.minY,
+            "Needs attention should appear before the programme portfolio."
+        )
+
+        let makeup = app.staticTexts["Makeup"].firstMatch
+        for _ in 0..<3 where !makeup.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(makeup.exists)
+        XCTAssertTrue(scrollUntilVisible(app.staticTexts["Unpaid makeup students"], in: app))
+        XCTAssertTrue(app.staticTexts["Distinct students this month"].exists)
+
+        let coordination = app.staticTexts["Weekend Coach Coordination"]
+        XCTAssertTrue(scrollUntilVisible(coordination, in: app))
+        XCTAssertTrue(app.staticTexts["Upcoming 1-1 sessions"].exists)
+        XCTAssertTrue(app.staticTexts["Coming Saturday"].exists)
+        XCTAssertTrue(app.staticTexts["Coming Sunday"].exists)
+
+        app.tabBars.buttons["Workspace"].tap()
+        XCTAssertTrue(app.navigationBars["Workspace"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Your operational workspace"].exists)
+        XCTAssertTrue(app.staticTexts["Quick access"].exists)
+        XCTAssertTrue(app.staticTexts["Programmes"].exists)
+        XCTAssertTrue(app.staticTexts["Makeup"].exists)
+        keepScreenshot(of: app, name: "Operational Workspace")
+    }
+
     func testProgrammeDirectoryAndNativeAttendanceNavigation() throws {
         let app = launchApp()
 
@@ -244,6 +311,9 @@ final class NavigationSmokeTests: XCTestCase {
             throw XCTSkip("A signed-in test account is required for authenticated navigation checks.")
         }
 
+        app.tabBars.buttons["Workspace"].tap()
+        XCTAssertTrue(app.navigationBars["Workspace"].waitForExistence(timeout: 4))
+
         let edit = app.buttons["Edit"]
         XCTAssertTrue(edit.waitForExistence(timeout: 5))
         edit.tap()
@@ -253,7 +323,7 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["Save"].exists)
     }
 
-    func testHomeAttendanceIsVisibleAboveProgrammesForEveryRole() throws {
+    func testHomeAttendanceAndWorkspaceRemainRoleAware() throws {
         for role in ["member", "admin", "superuser"] {
             let app = launchApp(arguments: ["-uiTestingRole=\(role)"])
 
@@ -267,15 +337,12 @@ final class NavigationSmokeTests: XCTestCase {
                 XCTAssertFalse(app.staticTexts["All Attendance"].firstMatch.exists)
             }
 
-            let attendanceRow = app.staticTexts["My Coaching Attendance"].firstMatch
-            let programmes = app.staticTexts["Programmes"].firstMatch
-            XCTAssertTrue(attendanceRow.exists)
-            XCTAssertTrue(programmes.exists)
-            XCTAssertLessThan(
-                attendanceRow.frame.minY,
-                programmes.frame.minY,
-                "Attendance should appear above Programmes on Home."
-            )
+            XCTAssertFalse(app.staticTexts["Quick access"].exists)
+
+            app.tabBars.buttons["Workspace"].tap()
+            XCTAssertTrue(app.navigationBars["Workspace"].waitForExistence(timeout: 4))
+            XCTAssertTrue(app.staticTexts["Programmes"].exists)
+            XCTAssertTrue(app.staticTexts["Quick access"].exists)
 
             app.terminate()
         }
@@ -562,7 +629,7 @@ final class NavigationSmokeTests: XCTestCase {
             superuserApp.navigationBars["Parent Conversation"]
                 .waitForExistence(timeout: 6)
         )
-        XCTAssertTrue(superuserApp.tabBars.buttons["Operations"].isSelected)
+        XCTAssertTrue(superuserApp.tabBars.buttons["Workspace"].isSelected)
         superuserApp.terminate()
 
         let memberApp = launchApp(arguments: [
@@ -602,8 +669,8 @@ final class NavigationSmokeTests: XCTestCase {
             throw XCTSkip("A signed-in test account is required for authenticated navigation checks.")
         }
 
-        app.tabBars.buttons["Operations"].tap()
-        app.staticTexts["Full Web Portal"].firstMatch.tap()
+        app.tabBars.buttons["Workspace"].tap()
+        app.staticTexts["Open the Full Website"].firstMatch.tap()
 
         XCTAssertTrue(app.navigationBars["Full Web Portal"].waitForExistence(timeout: 6))
         XCTAssertFalse(app.tabBars.buttons["Home"].exists)
@@ -753,7 +820,7 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertLessThan(
             notice.frame.maxY,
             homeTab.frame.minY,
-            "Notifications must remain fully above the Home, Operations and Account tabs."
+            "Notifications must remain fully above the Home, Workspace and Account tabs."
         )
         keepScreenshot(of: app, name: "Safe Area Notice")
     }
@@ -810,7 +877,7 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["1-1 Student Dashboard"].exists)
         XCTAssertFalse(app.staticTexts["1-1 Payments"].exists)
 
-        app.tabBars.buttons["Operations"].tap()
+        app.tabBars.buttons["Workspace"].tap()
         XCTAssertTrue(app.staticTexts["Support & Attendance"].waitForExistence(timeout: 4))
         app.staticTexts["Support & Attendance"].tap()
         XCTAssertTrue(app.staticTexts["My Coaching Attendance"].waitForExistence(timeout: 4))
@@ -831,7 +898,7 @@ final class NavigationSmokeTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Coach Attendance Poll"].exists)
         XCTAssertFalse(app.staticTexts["Weekend Payments"].exists)
 
-        app.tabBars.buttons["Operations"].tap()
+        app.tabBars.buttons["Workspace"].tap()
         XCTAssertFalse(app.staticTexts["Weekday"].exists)
         XCTAssertFalse(app.staticTexts["MatchPlay"].exists)
         XCTAssertTrue(app.staticTexts["Support & Attendance"].waitForExistence(timeout: 4))
@@ -868,6 +935,18 @@ final class NavigationSmokeTests: XCTestCase {
         app.launchArguments = ["-uiTesting"] + arguments
         app.launch()
         return app
+    }
+
+    @discardableResult
+    private func scrollUntilVisible(
+        _ element: XCUIElement,
+        in app: XCUIApplication,
+        attempts: Int = 6
+    ) -> Bool {
+        for _ in 0..<attempts where !element.exists {
+            app.swipeUp()
+        }
+        return element.exists
     }
 
     private func keepScreenshot(of app: XCUIApplication, name: String) {

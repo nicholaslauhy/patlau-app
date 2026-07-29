@@ -16,6 +16,74 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: data), original)
     }
 
+    func testOperationsCommandSummaryMirrorsWebsiteResponse() throws {
+        let response = JSONValue.object([
+            "role": .string("superuser"),
+            "todayLabel": .string("Wednesday, 29 July 2026"),
+            "weekend": .object([
+                "totalStudents": .number(8),
+                "saturdayStudents": .number(3),
+                "sundayStudents": .number(5),
+                "completedCourses": .number(2),
+                "todayLessonDay": .null,
+                "todayScheduled": .number(0),
+                "todayRecorded": .number(0),
+                "todayRemaining": .number(0)
+            ]),
+            "management": .object([
+                "activeOneToOneStudents": .number(4),
+                "upcomingOneToOneSessions": .number(3),
+                "activeCoachPolls": .number(1),
+                "upcomingSaturdayCoaches": .number(5),
+                "upcomingSundayCoaches": .number(4)
+            ]),
+            "superuser": .object([
+                "outstandingWeekendPayments": .number(2),
+                "escalatedParentChats": .number(1),
+                "unreadParentMessages": .number(5),
+                "activeWeekdayStudents": .number(6),
+                "activeMatchPlayStudents": .number(7),
+                "availableMakeupCredits": .number(9),
+                "unpaidMakeupStudents": .number(3)
+            ]),
+            "warnings": .array([
+                .string("One optional total is temporarily unavailable.")
+            ])
+        ])
+
+        let summary = try OperationsCommandSummary(response: response)
+
+        XCTAssertEqual(summary.role, .superuser)
+        XCTAssertEqual(summary.todayLabel, "Wednesday, 29 July 2026")
+        XCTAssertEqual(summary.weekend.totalStudents, 8)
+        XCTAssertEqual(summary.weekend.saturdayStudents, 3)
+        XCTAssertEqual(summary.weekend.sundayStudents, 5)
+        XCTAssertNil(summary.weekend.todayLessonDay)
+        XCTAssertEqual(summary.management?.activeOneToOneStudents, 4)
+        XCTAssertEqual(summary.management?.upcomingOneToOneSessions, 3)
+        XCTAssertEqual(summary.management?.upcomingSaturdayCoaches, 5)
+        XCTAssertEqual(summary.management?.upcomingSundayCoaches, 4)
+        XCTAssertEqual(summary.superuser?.activeWeekdayStudents, 6)
+        XCTAssertEqual(summary.superuser?.activeMatchPlayStudents, 7)
+        XCTAssertEqual(summary.superuser?.unreadParentMessages, 5)
+        XCTAssertEqual(summary.superuser?.unpaidMakeupStudents, 3)
+        XCTAssertEqual(
+            summary.warnings,
+            ["One optional total is temporarily unavailable."]
+        )
+    }
+
+    func testOperationsCommandSummaryRejectsMissingWeekendData() {
+        XCTAssertThrowsError(
+            try OperationsCommandSummary(
+                response: .object([
+                    "role": .string("admin"),
+                    "todayLabel": .string("Wednesday, 29 July 2026")
+                ])
+            )
+        )
+    }
+
     func testTrackedAuditExportReceiptRequiresSearchableRunID() throws {
         let response = JSONValue.object([
             "success": .bool(true),

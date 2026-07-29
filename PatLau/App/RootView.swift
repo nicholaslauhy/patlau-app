@@ -13,8 +13,7 @@ struct RootView: View {
             NavigationStack(path: $homePath) {
                 DashboardView(
                     onOpenGroup: { homePath.append(.group($0)) },
-                    onOpen: { homePath.append(.operation($0)) },
-                    onShowAllOperations: { selectedTab = .operations }
+                    onOpen: { homePath.append(.operation($0)) }
                 )
                 .appTabBarClearance()
                 .appNoticeHost()
@@ -39,7 +38,7 @@ struct RootView: View {
             }
             .tag(AppTab.operations)
             .tabItem {
-                Label("Operations", systemImage: "square.grid.2x2.fill")
+                Label("Workspace", systemImage: "square.grid.2x2.fill")
             }
 
             NavigationStack {
@@ -200,7 +199,8 @@ private struct AccountToolbarModifier: ViewModifier {
                             url: state.user?.avatarURL,
                             role: state.role,
                             size: 32,
-                            revision: state.avatarRevision
+                            revision: state.avatarRevision,
+                            tint: Theme.blue
                         )
                     }
                 }
